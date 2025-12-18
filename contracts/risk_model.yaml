@@ -1,0 +1,26 @@
+risk_model:
+  risk_of_ruin_posture:
+    horizon_days: 20
+    max_equity_drawdown_fraction: 0.25
+    probability_target_lt: 0.05
+
+  position_sizing:
+    contracts_fixed: 1
+    tick_value_usd: 1.25
+    point_value_usd: 5.0
+
+  risk_caps:
+    max_risk_per_trade_usd: 15
+    max_daily_loss_usd: 30
+    max_weekly_loss_usd: 75
+    max_monthly_loss_usd: 150
+
+  stop_budget_rule:
+    # stop_ticks * 1.25 must be <= max_risk_per_trade_usd
+    enforce: true
+    rounding: "FLOOR"
+
+  concurrent_positions:
+    allowed: false
+    if_signal_while_in_position: "IGNORE_AND_LOG"
+    if_contradicting_signal_while_in_position: "CONSIDER_EXIT_ONLY"

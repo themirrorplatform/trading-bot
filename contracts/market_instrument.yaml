@@ -1,0 +1,23 @@
+market_instrument_contract:
+  symbol: "MES"
+  tick_size: 0.25
+  tick_value_usd: 1.25
+  point_value_usd: 5.00
+
+  session_definition:
+    timezone: "America/New_York"
+    rth_start: "09:30"
+    rth_end: "16:00"
+    vwap_reset_time: "09:30"  # explicit (RTH open)
+    overnight_positions_allowed: false
+
+  trading_window:
+    mode: "RTH_ONLY"
+    no_trade_windows:
+      - {start: "09:30", end: "09:35", reason: "OPEN_CHAOS"}
+      - {start: "11:30", end: "13:30", reason: "LUNCH_VOID"}
+      - {start: "15:55", end: "16:00", reason: "CLOSE_CHAOS"}
+
+  rollover_policy:
+    v1: "MANUAL"
+    operator_procedure: "Switch symbol to front month before trading on rollover week/day."

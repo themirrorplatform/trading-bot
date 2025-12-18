@@ -1,0 +1,188 @@
+# STRATEGY TEMPLATES
+# Entry/exit archetypes, position sizing, stop/target schema
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial strategy templates for MES v1"
+    - "Structured entry/exit rules with explicit gates"
+    - "Position sizing caps and stop/target schema"
+
+# ==========================================
+# STRATEGY ARCHETYPES
+# ==========================================
+# v1: single template (F1 mean reversion)
+# Future: expand to trend-following, breakout, etc.
+
+strategy_templates:
+  - id: "F1_MEAN_REVERSION"
+    version: "1.0.0"
+    instrument: "MES"
+    description: "Mean reversion around VWAP during mid-morning session phase"
+    
+    # Entry conditions (all must be true)
+    entry_conditions:
+      - id: "SESSION_PHASE"
+        type: "session_phase_eq"
+        value: 2  # Mid-morning phase (10:30-11:30)
+        required: true
+        
+      - id: "PRICE_BELOW_VWAP"
+        type: "price_vs_vwap_lt"
+        threshold: -0.15  # Price < VWAP - 0.15%
+        required: true
+        
+      - id: "ATR_MODERATE"
+        type: "atr_norm_range"
+        min: 0.40
+        max: 0.75
+        required: true
+        reasoning: "Need volatility for moves but not chaos"
+        
+      - id: "SPREAD_NARROW"
+        type: "spread_ticks_lte"
+        value: 2
+        required: true
+        reasoning: "Tight spreads indicate good liquidity"
+        
+      - id: "DVS_GATE"
+        type: "dvs_gte"
+        threshold: 0.75  # From constitution
+        required: true
+        
+      - id: "EQS_GATE"
+        type: "eqs_gte"
+        threshold: 0.75  # From constitution
+        required: true
+        
+      - id: "NO_EXISTING_POSITION"
+        type: "position_eq"
+        value: 0
+        required: true
+        
+    # Exit conditions (any trigger = exit)
+    exit_conditions:
+      - id: "TARGET_HIT"
+        type: "price_vs_entry_gte"
+        threshold_ticks: 8  # 8 ticks = $10 profit
+        priority: 1
+        
+      - id: "STOP_HIT"
+        type: "price_vs_entry_lte"
+        threshold_ticks: -4  # 4 ticks = $5 loss
+        priority: 1
+        
+      - id: "SESSION_CHANGE"
+        type: "session_phase_neq"
+        value: 2  # Exit if phase changes
+        priority: 2
+        
+      - id: "FLATTEN_TIME"
+        type: "time_gte"
+        value: "15:55"  # From session.yaml
+        priority: 0  # Highest priority
+        
+      - id: "DVS_DEGRADED"
+        type: "dvs_lt"
+        threshold: 0.60  # From constitution hold gate
+        priority: 2
+        
+      - id: "EQS_DEGRADED"
+        type: "eqs_lt"
+        threshold: 0.60  # From constitution hold gate
+        priority: 2
+        
+    # Position sizing
+    position_sizing:
+      max_contracts: 1  # v1 restriction
+      size_method: "fixed"
+      fixed_size: 1
+      
+    # Stop/target params
+    stop_target:
+      stop_ticks: 4  # $5 risk
+      target_ticks: 8  # $10 profit
+      risk_reward_ratio: 2.0
+      
+      # Stop type per execution_contract
+      stop_order_type: "STOP_LIMIT"
+      stop_limit_offset_ticks: 2
+      
+      # Target type
+      target_order_type: "LIMIT"
+      
+    # Hold conditions (continue holding if all true)
+    hold_conditions:
+      - id: "DVS_ACCEPTABLE"
+        type: "dvs_gte"
+        threshold: 0.60
+        
+      - id: "EQS_ACCEPTABLE"
+        type: "eqs_gte"
+        threshold: 0.60
+        
+      - id: "SESSION_ACTIVE"
+        type: "session_phase_in"
+        values: [2, 4]  # Mid-morning or afternoon
+        
+      - id: "NOT_FLATTEN_TIME"
+        type: "time_lt"
+        value: "15:55"
+
+# ==========================================
+# TEMPLATE METADATA
+# ==========================================
+# Used for strategy selection and lifecycle management
+template_metadata:
+  active_templates: ["F1_MEAN_REVERSION"]
+  default_template: "F1_MEAN_REVERSION"
+  
+  # Future: template selection logic
+  # selection_logic: "manual" | "adaptive" | "portfolio"
+  selection_logic: "manual"
+
+# ==========================================
+# VALIDATION RULES
+# ==========================================
+validation:
+  required_fields:
+    - "id"
+    - "version"
+    - "instrument"
+    - "entry_conditions"
+    - "exit_conditions"
+    - "position_sizing"
+    - "stop_target"
+    
+  condition_types:
+    allowed:
+      - "session_phase_eq"
+      - "session_phase_neq"
+      - "session_phase_in"
+      - "price_vs_vwap_lt"
+      - "price_vs_vwap_gt"
+      - "price_vs_entry_gte"
+      - "price_vs_entry_lte"
+      - "atr_norm_range"
+      - "spread_ticks_lte"
+      - "dvs_gte"
+      - "dvs_lt"
+      - "eqs_gte"
+      - "eqs_lt"
+      - "position_eq"
+      - "time_gte"
+      - "time_lt"
+      
+  fail_closed: true  # Unknown condition types block strategy
+
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multiple templates per instrument
+# - Template ensembles (combine signals)
+# - Adaptive template selection based on regime
+# - Per-template performance tracking
+# - Dynamic stop/target adjustment
+#
+# v1: Single template, fixed params, manual selection

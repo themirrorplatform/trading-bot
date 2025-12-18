@@ -1,0 +1,55 @@
+learning_protocol:
+  cadence:
+    parameter_updates: "WEEKLY_AFTER_FRIDAY_CLOSE"
+    minimum_attributable_trades_for_update: 10
+    minimum_shadow_trades: 20
+
+  scoring:
+    process_weight: 0.7
+    outcome_weight: 0.3
+    process_score_components:
+      - belief_threshold_met
+      - stability_met
+      - regime_allowed
+      - dvs_ok
+      - eqs_ok
+      - friction_gate_passed
+      - entry_per_template
+      - exit_per_template
+      - no_invariant_violation
+    reinforcement_rule:
+      if_process_score_lt: 0.90
+
+  bounds:
+    signal_weights:
+      range: [0.0, 1.5]
+      max_delta_per_week: 0.05
+    belief_thresholds:
+      action_threshold_range: [0.58, 0.70]
+      exit_threshold_range: [0.48, 0.58]
+      max_delta_per_week: 0.01
+    template_parameters:
+      stop_buffer_ticks_delta_max: 1
+      time_stop_minutes_delta_max: 2
+    decay_rates_by_constraint:
+      F1: 0.96
+      F3: 0.98
+      F4: 0.95
+      F5: 0.94
+      F6: 0.97
+      bounds: [0.90, 0.995]
+      max_delta_per_week: 0.005
+
+  shadow_deployment:
+    required: true
+    promotion:
+      manual_required: true
+      criteria:
+        - "pessimistic_friction_adjusted_expectancy_gte_live"
+        - "max_drawdown_not_worse_than_live"
+        - "trade_frequency_not_higher_than_live"
+  rollback:
+    triggers:
+      - "process_score_drop_gt_0.05"
+      - "drawdown_worse_by_gt_20pct"
+    action: "REVERT_TO_LAST_STABLE_VERSION"

@@ -1,0 +1,36 @@
+execution_contract:
+  order_types_allowed:
+    entries: ["LIMIT", "STOP_LIMIT"]
+    exits: ["MARKET", "LIMIT"]
+
+  limit_order_lifetime_seconds:
+    entry_limit: 90
+
+  cancel_replace:
+    allowed: true
+    max_modifications_per_order: 2
+
+  slippage_model_ticks:
+    baseline: 1
+    add_if_atr14_norm_gt_0_70: 1
+    add_if_atr14_norm_gt_0_85: 2
+    add_if_spread_ge_2: 1
+
+  partial_fill_handling:
+    entry:
+      accept_partial: true
+      cancel_if_zero_fill_after_seconds: 30
+    exit:
+      partial_stop: "MARKET_REMAINDER_IMMEDIATELY"
+      partial_target:
+        keep_limit_seconds: 60
+        then: "MARKET_REMAINDER"
+
+  eqs:
+    gate_entries_require_eqs_gte: 0.75
+    gate_holding_requires_eqs_gte: 0.60
+    eqs_lt_0_30_action: "KILL_SWITCH"
+
+  disconnect_recovery:
+    on_connection_lost: ["CANCEL_ALL", "FLATTEN", "HALT_UNTIL_MANUAL_RESTART"]
+    on_order_state_unknown: ["KILL_SWITCH"]

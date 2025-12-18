@@ -1,0 +1,367 @@
+# OBSERVABILITY CONTRACT
+# Logging schemas, metrics, alert thresholds
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial observability contract"
+    - "Structured logging schemas with correlation IDs"
+    - "Metrics definitions and alert thresholds"
+    - "Event types and required fields"
+
+# ==========================================
+# LOGGING CONFIGURATION
+# ==========================================
+logging:
+  # Format
+  format: "JSONL"  # One JSON object per line
+  encoding: "utf-8"
+  
+  # Output targets
+  targets:
+    - type: "file"
+      path: "log/trading.log"
+      rotation: "daily"
+      retention_days: 90
+      
+    - type: "console"
+      enabled: true
+      level: "INFO"
+      
+  # Correlation IDs
+  use_correlation_ids: true
+  correlation_id_field: "correlation_id"
+  
+  # Timestamps
+  timestamp_field: "timestamp"
+  timestamp_format: "iso8601"
+  timezone: "UTC"
+
+# ==========================================
+# EVENT SCHEMAS
+# ==========================================
+# Structured schemas for each event type
+event_schemas:
+  # Decision events
+  decision:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "strategy_id"
+      - "decision"  # ENTER | HOLD | EXIT | NO_ACTION
+      - "reasoning"
+      - "dvs"
+      - "eqs"
+      - "session_phase"
+    optional_fields:
+      - "signals"
+      - "gates_passed"
+      - "gates_failed"
+      - "risk_budget_remaining"
+      
+  # Order events
+  order_placed:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "order_id"
+      - "order_type"  # LIMIT | STOP_LIMIT | MARKET
+      - "side"  # BUY | SELL
+      - "quantity"
+      - "price"
+    optional_fields:
+      - "stop_price"
+      - "time_to_live_seconds"
+      - "strategy_id"
+      
+  order_filled:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "order_id"
+      - "fill_price"
+      - "fill_quantity"
+      - "fill_time"
+      - "slippage_ticks"
+      - "slippage_usd"
+    optional_fields:
+      - "partial_fill"
+      - "slippage_vs_expected"
+      
+  order_rejected:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "order_id"
+      - "rejection_reason"
+      - "broker_message"
+    optional_fields:
+      - "retry_attempted"
+      
+  # Quality score events
+  dvs_update:
+    required_fields:
+      - "timestamp"
+      - "event_type"
+      - "dvs_before"
+      - "dvs_after"
+      - "trigger_event_id"
+      - "penalty_applied"
+    optional_fields:
+      - "recovery_applied"
+      
+  eqs_update:
+    required_fields:
+      - "timestamp"
+      - "event_type"
+      - "eqs_before"
+      - "eqs_after"
+      - "trigger_event_id"
+      - "penalty_applied"
+    optional_fields:
+      - "recovery_applied"
+      
+  # Risk events
+  risk_check:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "check_type"
+      - "passed"
+      - "reason"
+    optional_fields:
+      - "risk_metrics"
+      
+  kill_switch_triggered:
+    required_fields:
+      - "timestamp"
+      - "event_type"
+      - "trigger_id"
+      - "reasoning"
+      - "action_taken"
+    optional_fields:
+      - "state_snapshot"
+      
+  # Trade lifecycle
+  position_opened:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "strategy_id"
+      - "side"
+      - "quantity"
+      - "entry_price"
+      - "stop_price"
+      - "target_price"
+    optional_fields:
+      - "entry_reason"
+      
+  position_closed:
+    required_fields:
+      - "timestamp"
+      - "correlation_id"
+      - "event_type"
+      - "exit_price"
+      - "exit_reason"
+      - "pnl_ticks"
+      - "pnl_usd"
+      - "hold_duration_seconds"
+    optional_fields:
+      - "slippage_total_usd"
+      - "commission_usd"
+
+# ==========================================
+# METRICS DEFINITIONS
+# ==========================================
+metrics:
+  # Quality scores (time series)
+  dvs:
+    type: "gauge"
+    range: [0.0, 1.0]
+    track_changes: true
+    alert_thresholds:
+      critical: 0.30
+      warning: 0.60
+      
+  eqs:
+    type: "gauge"
+    range: [0.0, 1.0]
+    track_changes: true
+    alert_thresholds:
+      critical: 0.30
+      warning: 0.60
+      
+  # Execution metrics
+  slippage_realized_ticks:
+    type: "histogram"
+    buckets: [0, 1, 2, 3, 4, 5, 10]
+    track_per_order: true
+    
+  slippage_vs_expected_ratio:
+    type: "histogram"
+    buckets: [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+    alert_thresholds:
+      warning: 2.0
+      critical: 3.0
+      
+  fill_delay_seconds:
+    type: "histogram"
+    buckets: [0, 5, 10, 30, 60, 120]
+    alert_thresholds:
+      warning: 60
+      critical: 120
+      
+  order_rejection_rate:
+    type: "counter"
+    alert_thresholds:
+      warning: 0.10  # 10% rejection rate
+      critical: 0.20
+      
+  partial_fill_rate:
+    type: "counter"
+    alert_thresholds:
+      warning: 0.15
+      critical: 0.30
+      
+  # PnL metrics
+  daily_pnl_usd:
+    type: "gauge"
+    track_changes: true
+    alert_thresholds:
+      loss_warning: -30.00
+      loss_critical: -50.00
+      
+  trade_pnl_usd:
+    type: "histogram"
+    buckets: [-50, -25, -10, -5, 0, 5, 10, 25, 50]
+    
+  win_rate:
+    type: "gauge"
+    range: [0.0, 1.0]
+    alert_thresholds:
+      warning: 0.40  # Below 40% win rate
+      
+  # Risk metrics
+  consecutive_losses:
+    type: "counter"
+    alert_thresholds:
+      warning: 2
+      critical: 3
+      
+  daily_trade_count:
+    type: "counter"
+    alert_thresholds:
+      warning: 8
+      critical: 10
+      
+  max_intraday_drawdown_usd:
+    type: "gauge"
+    alert_thresholds:
+      warning: 30.00
+      critical: 50.00
+
+# ==========================================
+# ALERT RULES
+# ==========================================
+alerts:
+  # DVS/EQS degradation
+  - id: "DVS_CRITICAL"
+    condition:
+      metric: "dvs"
+      operator: "lt"
+      threshold: 0.30
+    severity: "CRITICAL"
+    action: "KILL_SWITCH"
+    
+  - id: "EQS_CRITICAL"
+    condition:
+      metric: "eqs"
+      operator: "lt"
+      threshold: 0.30
+    severity: "CRITICAL"
+    action: "KILL_SWITCH"
+    
+  # Execution issues
+  - id: "HIGH_SLIPPAGE"
+    condition:
+      metric: "slippage_vs_expected_ratio"
+      operator: "gt"
+      threshold: 2.0
+    severity: "WARNING"
+    action: "LOG"
+    
+  - id: "HIGH_REJECTION_RATE"
+    condition:
+      metric: "order_rejection_rate"
+      operator: "gt"
+      threshold: 0.20
+    severity: "CRITICAL"
+    action: "HALT_TRADING"
+    
+  # Risk breaches
+  - id: "DAILY_LOSS_LIMIT"
+    condition:
+      metric: "daily_pnl_usd"
+      operator: "lt"
+      threshold: -50.00
+    severity: "CRITICAL"
+    action: "KILL_SWITCH"
+    
+  - id: "CONSECUTIVE_LOSSES"
+    condition:
+      metric: "consecutive_losses"
+      operator: "gte"
+      threshold: 3
+    severity: "WARNING"
+    action: "PAUSE_TRADING"
+
+# ==========================================
+# EXPORT & REPLAY
+# ==========================================
+export:
+  # Export formats
+  formats:
+    - "JSONL"
+    - "CSV"
+    - "PARQUET"
+    
+  # Export targets
+  targets:
+    - type: "file"
+      path: "log/exports"
+      
+  # What to export
+  include:
+    - "decisions"
+    - "orders"
+    - "fills"
+    - "positions"
+    - "dvs_updates"
+    - "eqs_updates"
+    - "risk_checks"
+    - "alerts"
+    
+# Replay support
+replay:
+  enabled: true
+  deterministic: true
+  require_correlation_ids: true
+
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Distributed tracing (OpenTelemetry)
+# - Time-series DB (InfluxDB, Prometheus)
+# - Real-time dashboards (Grafana)
+# - Alert routing (PagerDuty, Slack)
+# - Log aggregation (ELK stack)
+# - Anomaly detection on metrics
+#
+# v1: File-based logs, simple alerting

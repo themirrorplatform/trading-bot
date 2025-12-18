@@ -1,0 +1,15 @@
+state_contract:
+  broker_is_truth: true
+  local_state_is_derived: true
+
+  idempotency:
+    intent_uuid_per_decision: true
+    retries_allowed: true
+    never_place_second_entry_if:
+      - "broker_has_working_order"
+      - "broker_has_open_position"
+
+  reconciliation:
+    interval_seconds: 2
+    if_local_position_differs_from_broker: "KILL_SWITCH"
+    if_order_state_unknown: "KILL_SWITCH"

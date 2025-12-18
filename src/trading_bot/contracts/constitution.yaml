@@ -1,0 +1,530 @@
+# CONSTITUTION - Immutable Safety Law
+# Cannot be overridden by learning or optimization
+# Layer 1 of hierarchy: Kill Switch > Constitution > All Other Layers
+
+version: "1.0.2"
+effective_date: "2025-12-18"
+changelog:
+  v1.0.2:
+    - "Kill triggers now fully structured/computable (not just renamed strings)"
+    - "Added explicit enforcement_mechanism section with required checks"
+    - "Added hierarchy arbitration rules (fail-closed precedence)"
+    - "Added instrument_binding to prevent cross-instrument misapplication"
+    - "All timeouts moved to state_contract.yaml and execution_contract.yaml"
+    
+  v1.0.1:
+    - "Fixed stop distance math (ticks vs points contradiction)"
+    - "Added explicit tier precedence rules for risk calculation"
+    - "Defined ConstitutionViolation concept"
+    - "Structured regime lockout conditions for computability"
+    - "Locked tier expansion to manual approval only (v1)"
+    - "Added compound stop distance enforcement rule"
+
+# ==========================================
+# POSITION LIMITS (Absolute)
+# ==========================================
+# Instrument binding (prevents misapplication to wrong contract)
+instrument_binding:
+  tick_value_usd_ref: "market_instrument.tick_value_usd"
+  contract_multiplier_ref: "market_instrument.contract_multiplier"
+  stop_ticks_derivation: "floor(max_risk_usd / tick_value_usd)"
+  note: "All tick-based limits must use instrument-specific tick value"
+
+position_limits:
+  max_position_contracts: 1  # v1: single contract only; v2+ will scale with capital
+  max_concurrent_positions: 1  # no hedging, no multiple entries
+  overnight_positions_allowed: false  # flatten before session close
+  
+# ==========================================
+# RISK LIMITS PER TRADE (Absolute)
+# ==========================================
+# CRITICAL: All risk measurements use TICKS to prevent math contradictions
+# MES: 1 tick = 0.25 points = $1.25
+risk_per_trade:
+  max_risk_usd: 15.00  # Absolute cap: cannot risk more than $15 on any single trade
+  max_stop_distance_ticks: 12  # Derived: floor(15.00 / 1.25) = 12 ticks maximum
+  
+  # Implementation rule:
+  # effective_stop_ticks = min(
+  #   risk_per_trade.max_stop_distance_ticks,
+  #   tier.max_stop_distance_ticks,
+  #   floor(effective_risk_usd / tick_value_usd)
+  # )
+  # Where effective_risk_usd = min(risk_per_trade.max_risk_usd, tier.max_risk_per_trade_usd)
+  
+  # ==========================================
+  # HIERARCHY ARBITRATION
+  # ==========================================
+  # Explicit order of authority when multiple gates/checks apply
+  # Higher layers override lower layers
+  hierarchy:
+    order_of_authority:
+      - layer: 0
+        name: "KILL_SWITCH"
+        overrides: "everything"
+      
+      - layer: 1
+        name: "CONSTITUTION"
+        overrides: "all_below"
+      
+      - layer: 2
+        name: "QUALITY_GATES"
+        components: ["DVS", "EQS"]
+      
+      - layer: 3
+        name: "SESSION_GATES"
+        source: "session.yaml"
+      
+      - layer: 4
+        name: "REGIME_LOCKOUTS"
+        components: ["vol_shock", "execution_danger", "news_shock"]
+      
+      - layer: 5
+        name: "CAPITAL_TIER_GATES"
+      
+      - layer: 6
+        name: "BELIEF_STABILITY_GATES"
+      
+      - layer: 7
+        name: "FRICTION_GATE"
+      
+      - layer: 8
+        name: "TEMPLATE_EXECUTION"
+      
+    fail_closed_default: true
+    note: "If any gate is undefined/missing, default to NO_TRADE"
+  
+# ==========================================
+# DRAWDOWN LIMITS (Cumulative)
+# ==========================================
+# Daily loss includes realized + worst-case open risk
+drawdown_limits:
+  max_daily_loss_usd: 30.00
+  max_weekly_loss_usd: 75.00
+  max_monthly_loss_usd: 150.00
+  
+  # Consecutive loss gate
+  max_consecutive_losses: 2  # After 2 losses in a row, lockout until next session
+  consecutive_loss_action: "LOCKOUT_UNTIL_NEXT_SESSION"
+  
+# ==========================================
+# FREQUENCY LIMITS (Anti-overtrading)
+# ==========================================
+frequency_limits:
+  max_trades_per_day: 2
+  max_entries_per_hour: 1
+  min_minutes_between_entries: 30
+  
+# ==========================================
+# DATA QUALITY GATES (DVS)
+# ==========================================
+# Data Validity Score ∈ [0, 1]
+dvs_gates:
+  min_dvs_for_entry: 0.80
+  min_dvs_for_hold: 0.60
+  kill_switch_dvs_threshold: 0.30  # Below this, halt everything
+  
+# ==========================================
+# EXECUTION QUALITY GATES (EQS)
+# ==========================================
+# Execution Quality Score ∈ [0, 1]
+eqs_gates:
+  min_eqs_for_entry: 0.75
+  min_eqs_for_hold: 0.60
+  kill_switch_eqs_threshold: 0.30  # Below this, halt everything
+  
+# ==========================================
+# FRICTION GATE (Honest Math)
+# ==========================================
+friction_gate:
+  max_friction_share: 0.30  # Pessimistic friction / expected_move_to_T1 must be ≤ 30%
+  pessimistic_base_friction_usd: 9.00  # Base worst-case RT cost
+  max_additional_slippage_usd: 6.00  # Additional in high-vol/wide-spread conditions
+  
+# ==========================================
+# REGIME LOCKOUTS (Observe-Only Periods)
+# ==========================================
+# Structured conditions for computability and testability
+regime_lockouts:
+  # Volatility shock: ATR spike or huge bar
+  vol_shock:
+    atr14_norm_gte: 0.85
+    bar_tr_over_atr30_gte: 4.0
+    logic: "OR"  # Either condition triggers lockout
+    lockout_duration_minutes: 60
+    action: "OBSERVE_ONLY"
+    reasoning: "Extreme volatility makes friction unpredictable and invalidates normal behavior"
+    
+  # Spread/slippage danger
+  execution_danger:
+    spread_ticks_gte: 3
+    slippage_estimate_ticks_gte: 3
+    logic: "OR"  # Either condition triggers lockout
+    lockout_duration_minutes: 30
+    action: "OBSERVE_ONLY"
+    reasoning: "Wide spreads or high slippage make cost structure unacceptable"
+    
+  # News shock (proxy via shock signature from attribution.yaml)
+  news_shock:
+    shock_signature_detected: true
+    lockout_duration_minutes: 45
+    action: "OBSERVE_ONLY"
+    reasoning: "Information events create unpredictable volatility outside normal patterns"
+    
+# ==========================================
+# KILL SWITCH TRIGGERS (Layer 0)
+# ==========================================
+# If ANY of these trigger, system must:
+# 1. CANCEL ALL working orders
+# 2. FLATTEN all positions (market order if necessary)
+# 3. HALT until manual restart
+kill_switch:
+  # Fully structured triggers (computable and testable)
+  triggers:
+    - id: "CONSTITUTION_VIOLATION"
+      description: "Any breach of constitutional limits"
+      conditions:
+        - "position_contracts > position_limits.max_position_contracts"
+        - "risk_usd > effective_risk_usd"
+        - "stop_ticks > effective_stop_ticks"
+        - "daily_loss_usd > drawdown_limits.max_daily_loss_usd"
+        - "weekly_loss_usd > drawdown_limits.max_weekly_loss_usd"
+        - "monthly_loss_usd > drawdown_limits.max_monthly_loss_usd"
+        - "trades_today > frequency_limits.max_trades_per_day"
+      action: "IMMEDIATE_KILL"
+      
+    - id: "LAYER0_VIOLATION"
+      description: "Code-level invariant breach (should be impossible)"
+      examples: ["negative_position", "overflow", "impossible_state"]
+      action: "IMMEDIATE_KILL"
+      
+    - id: "ORDER_STATE_DESYNC"
+      metric: "STATE_DESYNC"
+      operator: "detected"
+      description: "Local state != broker state"
+      action: "IMMEDIATE_KILL"
+      timeout_ref: "state_contract.reconciliation_tolerance_seconds"
+      
+    - id: "DVS_KILL_THRESHOLD"
+      metric: "DVS"
+      operator: "<"
+      threshold_ref: "dvs_gates.kill_switch_dvs_threshold"
+      threshold_value: 0.30
+      description: "Data quality collapsed"
+      action: "IMMEDIATE_KILL"
+      
+    - id: "EQS_KILL_THRESHOLD"
+      metric: "EQS"
+      operator: "<"
+      threshold_ref: "eqs_gates.kill_switch_eqs_threshold"
+      threshold_value: 0.30
+      description: "Execution quality collapsed"
+      action: "IMMEDIATE_KILL"
+      
+    - id: "UNEXPECTED_POSITION"
+      metric: "POSITION_MISMATCH"
+      operator: "detected"
+      description: "Broker position we didn't initiate"
+      action: "IMMEDIATE_KILL"
+      
+    - id: "CONNECTION_LOST"
+      metric: "CONNECTION_STATE"
+      operator: "=="
+      value: "LOST"
+      description: "Lost connection to broker"
+      action: "IMMEDIATE_KILL"
+      timeout_ref: "execution_contract.connection_timeout_seconds"
+      
+    - id: "ORDER_STATE_UNKNOWN"
+      metric: "ORDER_STATE"
+      operator: "=="
+      value: "UNKNOWN"
+      description: "Cannot determine order status"
+      action: "IMMEDIATE_KILL"
+      timeout_ref: "execution_contract.order_status_timeout_seconds"
+      
+    - id: "EXCEPTION_IN_CRITICAL_LOOP"
+      metric: "UNHANDLED_EXCEPTION"
+      operator: "raised"
+      description: "Exception in main loop"
+      action: "IMMEDIATE_KILL"
+      
+    - id: "MANUAL_KILL_COMMAND"
+      metric: "KILL_COMMAND"
+      operator: "received"
+      description: "Human operator halt"
+      action: "IMMEDIATE_KILL"
+    
+  # Actions (executed in order)
+  action_sequence:
+    - step: 1
+      action: "CANCEL_ALL_ORDERS"
+      timeout_seconds: 5
+      failure_handling: "LOG_AND_CONTINUE"
+      
+    - step: 2
+      action: "FLATTEN_POSITIONS"
+      method: "MARKET_ORDERS"  # Accept slippage; must exit
+      timeout_seconds: 10
+      failure_handling: "LOG_AND_ALERT_HUMAN"
+      
+    - step: 3
+      action: "HALT_SYSTEM"
+      state: "KILLED"
+      
+    - step: 4
+      action: "LOG_KILL_EVENT"
+      log_level: "CRITICAL"
+      include_full_state: true
+      
+    - step: 5
+      action: "ALERT_HUMAN"
+      methods: ["LOG_FILE", "CONSOLE", "EMAIL_IF_CONFIGURED"]
+      
+    - step: 6
+      action: "REQUIRE_MANUAL_RESTART"
+      note: "System will not auto-restart after kill switch"
+    
+# ==========================================
+# SESSION GATES (No-Trade Windows)
+# ==========================================
+# Single source of truth: session.yaml defines all temporal rules
+# Constitution enforces that session gates MUST be obeyed
+session_gates:
+  source: "contracts/session.yaml"  # Canonical definition
+  enforcement: "MANDATORY"
+  flatten_before_session_close: true  # Constitutional requirement: no overnight positions
+  
+  # If session.yaml is missing or corrupt, fail-closed
+  missing_session_contract_behavior: "HALT_SYSTEM"
+  
+# ==========================================
+# EVOLUTION CONSTRAINTS (Bounded Learning)
+# ==========================================
+# These limit how fast the system can evolve to prevent runaway optimization
+# CONSTITUTIONAL ENFORCEMENT: Evolution engine MUST refuse updates outside these bounds
+evolution_constraints:
+  update_cadence: "weekly"  # Only on Friday after session close
+  min_trades_for_update: 10  # Need at least 10 attributable trades
+  
+  # Enforcement mechanism
+  enforcement:
+    evolution_engine_must_reject_out_of_bounds: true
+    violation_action: "LOG_ERROR_AND_KEEP_CURRENT_PARAMS"
+    note: "Evolution cannot override constitution, ever"
+  
+  # Parameter bounds (cannot be violated by learning)
+  parameter_bounds:
+    signal_weights:
+      min: 0.0
+      max: 1.5
+      max_change_per_week: 0.05
+      
+    belief_thresholds:
+      min: 0.50
+      max: 0.95
+      max_change_per_week: 0.01
+      
+    decay_rates:
+      min: 0.90
+      max: 0.995
+      max_change_per_week: 0.005
+      
+    template_stop_buffer_ticks:
+      min: -2
+      max: 2
+      max_change_per_week: 1
+      note: "Adjusts stop placement, but final stop must still satisfy ALL risk constraints"
+      
+    template_time_stop_minutes:
+      min: 10
+      max: 60
+      max_change_per_week: 2
+      
+  # Final stop enforcement (compound check)
+  # After applying stop_buffer, final stop must satisfy:
+  # stop_ticks_final <= min(
+  #   risk_per_trade.max_stop_distance_ticks,
+  #   tier.max_stop_distance_ticks,
+  #   floor(effective_risk_usd / tick_value_usd)
+  # )
+  compound_stop_check: "MANDATORY"
+    
+# ==========================================
+# CAPITAL TIER GATES (Controlled Expansion)
+# ==========================================
+# v1 TIERS: S, A, B (locked)
+# Future tier expansion REQUIRES manual constitutional amendment
+capital_tiers:
+  # Risk calculation precedence (MANDATORY):
+  # effective_risk_usd = min(risk_per_trade.max_risk_usd, tier.max_risk_per_trade_usd)
+  # effective_stop_ticks = min(
+  #   risk_per_trade.max_stop_distance_ticks,
+  #   tier.max_stop_distance_ticks,
+  #   floor(effective_risk_usd / tick_value_usd)
+  # )
+  
+  tier_S:  # Survival tier - starting point ($1,000)
+    name: "Survival"
+    min_capital_usd: 0
+    max_capital_usd: 2500
+    allowed_templates: ["K1", "K2"]
+    max_stop_distance_ticks: 10  # 10 ticks = $12.50 risk
+    max_risk_per_trade_usd: 12.00
+    note: "Will trade 0-2 times per week due to friction gate - this is correct"
+    
+  tier_A:  # Advancement tier
+    name: "Advancement"
+    min_capital_usd: 2500
+    max_capital_usd: 7500
+    allowed_templates: ["K1", "K2", "K3"]
+    max_stop_distance_ticks: 14  # 14 ticks = $17.50, but capped at $15 by constitution
+    max_risk_per_trade_usd: 15.00
+    
+  tier_B:  # Breakout tier (open-ended in v1)
+    name: "Breakout"
+    min_capital_usd: 7500
+    max_capital_usd: null  # No upper limit in v1
+    allowed_templates: ["K1", "K2", "K3", "K4"]
+    max_stop_distance_ticks: 18  # 18 ticks = $22.50, but capped at $15 by constitution
+    max_risk_per_trade_usd: 15.00
+    note: "Tier B handles all capital >= $7,500 in v1"
+    
+  # TIER EXPANSION POLICY (v1)
+  tier_expansion:
+    v1_behavior: "LOCKED_TO_S_A_B"
+    self_expansion_allowed: false
+    bot_may_recommend_new_tiers: true  # Can suggest, but not implement
+    new_tier_activation: "MANUAL_CONSTITUTIONAL_AMENDMENT_REQUIRED"
+    reasoning: "Prevents loophole where bot creates permissive tiers to bypass restrictions"
+    
+  # FUTURE ROADMAP (for manual implementation when needed)
+  future_tiers_roadmap:
+    tier_C:
+      estimated_capital_range: "15000-30000"
+      capabilities: ["Multiple contracts", "Position scaling", "ES transition consideration"]
+    tier_D:
+      estimated_capital_range: "30000-75000"
+      capabilities: ["Portfolio strategies", "Correlation hedging", "ES primary"]
+    tier_E:
+      estimated_capital_range: "75000+"
+      capabilities: ["Institutional-scale strategies", "Multi-instrument", "Options overlay"]
+    note: "These are planning notes only. Not active in v1."
+  
+# ==========================================
+# CONSTITUTIONAL ENFORCEMENT
+# ==========================================
+# How this constitution is enforced in code:
+enforcement_mechanism:
+  # Pre-trade validation (MANDATORY before any order placement)
+  pre_trade_checks:
+    required: true
+    checks:
+      - check_id: "POSITION_LIMIT"
+        validate: "position_after_fill <= position_limits.max_position_contracts"
+        
+      - check_id: "RISK_LIMIT"
+        validate: "trade_risk_usd <= effective_risk_usd"
+        
+      - check_id: "STOP_LIMIT"
+        validate: "stop_ticks <= effective_stop_ticks"
+        
+      - check_id: "DAILY_LOSS_LIMIT"
+        validate: "daily_loss_usd + worst_case_risk <= drawdown_limits.max_daily_loss_usd"
+        
+      - check_id: "WEEKLY_LOSS_LIMIT"
+        validate: "weekly_loss_usd + worst_case_risk <= drawdown_limits.max_weekly_loss_usd"
+        
+      - check_id: "MONTHLY_LOSS_LIMIT"
+        validate: "monthly_loss_usd + worst_case_risk <= drawdown_limits.max_monthly_loss_usd"
+        
+      - check_id: "TRADE_FREQUENCY"
+        validate: "trades_today < frequency_limits.max_trades_per_day"
+        
+      - check_id: "ENTRY_COOLDOWN"
+        validate: "minutes_since_last_entry >= frequency_limits.min_minutes_between_entries"
+        
+      - check_id: "DVS_ENTRY_GATE"
+        validate: "DVS >= dvs_gates.min_dvs_for_entry"
+        
+      - check_id: "EQS_ENTRY_GATE"
+        validate: "EQS >= eqs_gates.min_eqs_for_entry"
+        
+      - check_id: "SESSION_GATE"
+        validate: "current_time NOT IN session.no_trade_windows"
+        
+      - check_id: "REGIME_LOCKOUT"
+        validate: "NOT in_lockout_period"
+        
+    on_failure:
+      action: "NO_TRADE"
+      emit_event: "CONSTITUTION_CHECK_FAILED"
+      log_reason_code: true
+      
+  # Post-trade validation (MANDATORY after every fill)
+  post_trade_checks:
+    required: true
+    checks:
+      - check_id: "POSITION_RECONCILIATION"
+        validate: "actual_position == expected_position"
+        
+      - check_id: "RISK_RECONCILIATION"
+        validate: "actual_risk_usd <= effective_risk_usd"
+        
+      - check_id: "DRAWDOWN_CHECK"
+        validate: "realized_loss + open_risk <= drawdown_limits"
+        
+    on_failure:
+      action: "KILL_SWITCH"
+      reason: "POST_TRADE_VIOLATION"
+      note: "Should be impossible if pre-trade checks passed"
+      
+  # Event emission (required for audit trail)
+  required_events:
+    - event: "CONSTITUTION_CHECK_PRE_TRADE"
+      when: "before_every_order_placement"
+      fields: ["timestamp", "check_results", "decision"]
+      
+    - event: "CONSTITUTION_CHECK_POST_TRADE"
+      when: "after_every_fill"
+      fields: ["timestamp", "check_results", "position_state"]
+      
+    - event: "CONSTITUTION_VIOLATION"
+      when: "any_check_fails_in_live_mode"
+      fields: ["timestamp", "violation_type", "violated_limit", "actual_value", "kill_switch_triggered"]
+      severity: "CRITICAL"
+    
+  # Violation consequences
+  violation_handling:
+    in_live_mode: "KILL_SWITCH"  # Any violation during live trading halts system
+    in_observation_mode: "LOG_ERROR_CONTINUE"  # Log but don't halt
+    in_simulation_mode: "LOG_ERROR_CONTINUE"  # Log but don't halt
+    
+  # Pre-trade validation (MANDATORY)
+  pre_trade_checks:
+    - "Validate all constitutional constraints BEFORE placing order"
+    - "If any constraint violated, return NO_TRADE with specific reason code"
+    - "Log validation failure for forensics"
+    
+  # Post-trade reconciliation (MANDATORY)
+  post_trade_checks:
+    - "After every fill, verify position is legal"
+    - "After every fill, verify realized + open risk within limits"
+    - "If violation detected post-trade, KILL_SWITCH (should be impossible)"
+
+# ==========================================
+# NOTES ON SCALABILITY & IMMUTABILITY
+# ==========================================
+# This constitution is designed for:
+# - Starting capital: $1,000
+# - Unlimited upside potential (via manual tier expansion when needed)
+# - Learning rate adapts to information quality
+# - NO MAXIMUM CAPITAL LIMIT (but tier expansion requires human approval)
+# 
+# Immutability:
+# - This file can only be changed via manual edit + system restart
+# - Evolution engine cannot modify constitutional parameters
+# - New tiers require constitutional amendment (new version, explicit changelog)
+# - Bot may recommend changes but cannot implement them
+#
+# The constitution is law. Code is enforcement. They must match exactly.

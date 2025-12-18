@@ -1,0 +1,71 @@
+constitution:
+  version: "1.0.0"
+  instrument: "MES"
+  objective: "Survival-first. Process compliance over PnL. Non-participation default."
+
+  invariants:
+    risk:
+      max_position_contracts: 1
+      max_risk_per_trade_usd: 15
+      max_daily_loss_usd: 30
+      max_weekly_loss_usd: 75
+      max_monthly_loss_usd: 150
+      max_consecutive_losses: 2
+      max_trades_per_day: 2
+      max_entries_per_hour: 1
+      min_minutes_between_entries: 30
+
+    quality_gates:
+      data_validity_min_for_entry: 0.80
+      data_validity_min_to_hold: 0.60
+      execution_quality_min_for_entry: 0.75
+      execution_quality_min_to_hold: 0.60
+
+    friction_gates:
+      pessimistic_roundtrip_usd: 9.00
+      pessimistic_slippage_add_usd_max: 6.00
+      max_allowed_pessimistic_friction_share_of_expected_move: 0.30
+
+    volatility_shock_lockout:
+      trigger:
+        atr14_norm_gte: 0.85
+        or_true_range_mult_gte: 4.0
+      action:
+        mode: "OBSERVE_ONLY"
+        duration_minutes: 60
+
+    spread_slippage_lockout:
+      trigger:
+        spread_ticks_gte: 3
+        slippage_estimate_ticks_gte: 3
+      action:
+        mode: "OBSERVE_ONLY"
+        duration_minutes: 30
+
+    news_lockout:
+      # v1: shock-signature proxy; optional calendar integration later
+      trigger:
+        shock_signature: true
+      action:
+        mode: "OBSERVE_ONLY"
+        duration_minutes: 45
+
+    kill_switch:
+      triggers:
+        - "Layer0Violation"
+        - "OrderStateDesync"
+        - "DVS_LT_0_30"
+        - "EQS_LT_0_30"
+        - "UnexpectedPositionDetected"
+        - "DisconnectDetected"
+        - "UnknownOrderState"
+      action:
+        - "CANCEL_ALL"
+        - "FLATTEN"
+        - "HALT_UNTIL_MANUAL_RESTART"
+
+  non_negotiable_principles:
+    - "No martingale. No averaging down. No size increase after losses."
+    - "No discretionary override that forces an entry."
+    - "No intra-session parameter changes."
+    - "Any rule breach is a BUG, not a learning event."

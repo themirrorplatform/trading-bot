@@ -1,0 +1,172 @@
+# CALENDAR
+# Market holidays, half-days, special trading sessions
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial calendar for 2025"
+    - "US market holidays and half-days"
+    - "Fail-closed policy for unknown dates"
+
+# ==========================================
+# MARKET HOLIDAYS (Market Closed)
+# ==========================================
+# Dates when US equity/futures markets are closed
+holidays:
+  - date: "2025-01-01"
+    name: "New Year's Day"
+    observed: "2025-01-01"
+    
+  - date: "2025-01-20"
+    name: "Martin Luther King Jr. Day"
+    observed: "2025-01-20"
+    
+  - date: "2025-02-17"
+    name: "Presidents' Day"
+    observed: "2025-02-17"
+    
+  - date: "2025-04-18"
+    name: "Good Friday"
+    observed: "2025-04-18"
+    
+  - date: "2025-05-26"
+    name: "Memorial Day"
+    observed: "2025-05-26"
+    
+  - date: "2025-06-19"
+    name: "Juneteenth"
+    observed: "2025-06-19"
+    
+  - date: "2025-07-04"
+    name: "Independence Day"
+    observed: "2025-07-04"
+    
+  - date: "2025-09-01"
+    name: "Labor Day"
+    observed: "2025-09-01"
+    
+  - date: "2025-11-27"
+    name: "Thanksgiving Day"
+    observed: "2025-11-27"
+    
+  - date: "2025-12-25"
+    name: "Christmas Day"
+    observed: "2025-12-25"
+
+# ==========================================
+# HALF DAYS (Early Close)
+# ==========================================
+# Dates when market closes early (typically 1:00 PM ET)
+half_days:
+  - date: "2025-07-03"
+    name: "Day before Independence Day"
+    close_time: "13:00"
+    close_time_et: "13:00"
+    
+  - date: "2025-11-28"
+    name: "Day after Thanksgiving"
+    close_time: "13:00"
+    close_time_et: "13:00"
+    
+  - date: "2025-12-24"
+    name: "Christmas Eve"
+    close_time: "13:00"
+    close_time_et: "13:00"
+
+# ==========================================
+# SPECIAL SESSIONS
+# ==========================================
+# Days with unusual trading hours or conditions
+special_sessions:
+  # Currently empty for v1
+  # Future: early opens, extended hours, etc.
+
+# ==========================================
+# TRADING POLICY
+# ==========================================
+# How to handle special days
+trading_policy:
+  # Holidays
+  holidays:
+    allow_trading: false
+    flatten_before: false  # Market is closed
+    reasoning: "No trading when market is closed"
+    
+  # Half days
+  half_days:
+    allow_trading: true
+    flatten_before_early_close: true
+    flatten_time: "12:55"  # 5 min before early close
+    reasoning: "Trade normally but flatten before early close"
+    
+  # Unknown dates (fail-closed)
+  unknown_date:
+    policy: "OBSERVE_ONLY"
+    reasoning: "If calendar is incomplete or stale, don't trade"
+    log_unknown_date: true
+    alert_on_unknown_date: true
+
+# ==========================================
+# CALENDAR VALIDATION
+# ==========================================
+validation:
+  # Required fields for each entry
+  required_fields:
+    holidays:
+      - "date"
+      - "name"
+      - "observed"
+      
+    half_days:
+      - "date"
+      - "name"
+      - "close_time"
+      
+  # Date format
+  date_format: "YYYY-MM-DD"
+  
+  # Fail-closed behavior
+  fail_closed: true  # If calendar fails to load, trading is disabled
+
+# ==========================================
+# CALENDAR UPDATES
+# ==========================================
+# How to keep calendar current
+updates:
+  # Manual updates
+  manual_review_required: true
+  update_frequency: "annually"
+  
+  # Validation before trading
+  validate_on_startup: true
+  check_date_coverage: true
+  warn_if_stale_days: 30  # Warn if calendar hasn't been updated in 30 days
+  
+  # External sources (future)
+  # external_source: "https://www.cmegroup.com/tools-information/holiday-calendar.html"
+  # auto_sync: false  # v1: manual only
+
+# ==========================================
+# TIMEZONE HANDLING
+# ==========================================
+timezone:
+  # Market timezone
+  market_timezone: "US/Eastern"
+  
+  # Calendar dates are in market timezone
+  dates_in_market_tz: true
+  
+  # System time conversion
+  convert_to_utc: true  # Internal timestamps in UTC
+
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multi-market calendars (US, EU, Asia)
+# - Per-instrument calendars (different futures contracts)
+# - Auto-sync from external sources
+# - Calendar versioning and audit trail
+# - Real-time holiday announcements
+#
+# v1: US markets only, manual updates, fail-closed

@@ -1,0 +1,299 @@
+# STATE CONTRACT
+# Persistent fields, allowed transitions, state machine
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial state contract for MES v1"
+    - "Defined persistent state fields and schema"
+    - "State machine transitions and guards"
+    - "Idempotency requirements"
+
+# ==========================================
+# STATE SCHEMA
+# ==========================================
+# Canonical state fields that must be persisted
+state_schema:
+  # Session state
+  session:
+    session_date:
+      type: "date"
+      required: true
+      
+    session_phase:
+      type: "integer"
+      range: [0, 5]
+      required: true
+      
+    trading_enabled:
+      type: "boolean"
+      required: true
+      default: false
+      
+    kill_switch_active:
+      type: "boolean"
+      required: true
+      default: false
+      
+  # Position state
+  position:
+    net_position:
+      type: "integer"
+      range: [-1, 1]  # v1: single contract only
+      required: true
+      default: 0
+      
+    entry_price:
+      type: "float"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    entry_time:
+      type: "timestamp"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    stop_price:
+      type: "float"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    target_price:
+      type: "float"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    stop_order_id:
+      type: "string"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    target_order_id:
+      type: "string"
+      required_if: "net_position != 0"
+      nullable: true
+      
+    correlation_id:
+      type: "string"
+      required_if: "net_position != 0"
+      nullable: true
+      
+  # Quality scores
+  quality:
+    dvs:
+      type: "float"
+      range: [0.0, 1.0]
+      required: true
+      default: 1.0
+      
+    eqs:
+      type: "float"
+      range: [0.0, 1.0]
+      required: true
+      default: 1.0
+      
+  # Risk tracking
+  risk:
+    daily_pnl_usd:
+      type: "float"
+      required: true
+      default: 0.0
+      
+    daily_trades:
+      type: "integer"
+      required: true
+      default: 0
+      
+    consecutive_wins:
+      type: "integer"
+      required: true
+      default: 0
+      
+    consecutive_losses:
+      type: "integer"
+      required: true
+      default: 0
+      
+    max_intraday_drawdown_usd:
+      type: "float"
+      required: true
+      default: 0.0
+      
+    peak_equity_usd:
+      type: "float"
+      required: true
+      
+  # Order tracking
+  orders:
+    working_orders:
+      type: "list"
+      element_type: "order_id"
+      required: true
+      default: []
+      
+    pending_orders:
+      type: "list"
+      element_type: "order_id"
+      required: true
+      default: []
+
+# ==========================================
+# STATE MACHINE
+# ==========================================
+# Allowed state transitions and guards
+state_machine:
+  # Trading states
+  states:
+    - OBSERVE_ONLY
+    - READY_TO_TRADE
+    - POSITION_OPEN
+    - KILL_SWITCH
+    
+  # Initial state
+  initial_state: OBSERVE_ONLY
+  
+  # Transitions
+  transitions:
+    - from: OBSERVE_ONLY
+      to: READY_TO_TRADE
+      guard: "trading_enabled == true AND kill_switch_active == false"
+      
+    - from: READY_TO_TRADE
+      to: POSITION_OPEN
+      guard: "net_position != 0"
+      action: "record_entry"
+      
+    - from: POSITION_OPEN
+      to: READY_TO_TRADE
+      guard: "net_position == 0"
+      action: "record_exit"
+      
+    - from: READY_TO_TRADE
+      to: OBSERVE_ONLY
+      guard: "trading_enabled == false OR session_phase NOT IN [1,2,4]"
+      
+    - from: POSITION_OPEN
+      to: OBSERVE_ONLY
+      guard: "trading_enabled == false"
+      action: "flatten_position"
+      
+    - from: "*"
+      to: KILL_SWITCH
+      guard: "kill_switch_active == true"
+      action: "flatten_and_cancel"
+      
+    - from: KILL_SWITCH
+      to: OBSERVE_ONLY
+      guard: "manual_resume == true AND kill_switch_active == false"
+
+# ==========================================
+# STATE PERSISTENCE
+# ==========================================
+persistence:
+  # Storage backend
+  backend: "sqlite"
+  path: "state/trading_state.db"
+  
+  # Schema versioning
+  schema_version: "1.0.0"
+  
+  # Persistence frequency
+  persist_on:
+    - "state_change"
+    - "order_event"
+    - "position_change"
+    - "dvs_update"
+    - "eqs_update"
+    - "risk_update"
+    
+  # Snapshot frequency
+  snapshot_interval_seconds: 60
+  
+  # Retention
+  retain_history: true
+  history_retention_days: 90
+
+# ==========================================
+# IDEMPOTENCY
+# ==========================================
+# Ensures state updates can be safely replayed
+idempotency:
+  # Required for all state-modifying operations
+  require_correlation_ids: true
+  
+  # Deduplication
+  deduplicate_fills: true
+  deduplicate_window_seconds: 300
+  
+  # Reconciliation with broker
+  reconcile_on_startup: true
+  reconcile_on_disconnect: true
+  broker_is_truth: true  # Broker state overrides local state on mismatch
+
+# ==========================================
+# STATE VALIDATION
+# ==========================================
+validation:
+  # Invariants that must always hold
+  invariants:
+    - id: "POSITION_BOUNDS"
+      condition: "net_position IN [-1, 0, 1]"
+      reasoning: "v1 supports single contract only"
+      
+    - id: "POSITION_ORDERS_CONSISTENT"
+      condition: "IF net_position != 0 THEN stop_order_id IS NOT NULL"
+      reasoning: "Every position must have a stop"
+      
+    - id: "QUALITY_SCORES_VALID"
+      condition: "0.0 <= dvs <= 1.0 AND 0.0 <= eqs <= 1.0"
+      reasoning: "Quality scores are clamped [0,1]"
+      
+    - id: "KILL_SWITCH_IMPLIES_NO_POSITION"
+      condition: "IF kill_switch_active THEN net_position == 0"
+      reasoning: "Kill switch must flatten positions"
+      
+    - id: "DAILY_TRADES_NON_NEGATIVE"
+      condition: "daily_trades >= 0"
+      reasoning: "Trade count cannot be negative"
+      
+  # Validation frequency
+  validate_on_update: true
+  fail_on_violation: true
+
+# ==========================================
+# STATE RECOVERY
+# ==========================================
+# How to recover from crashes or inconsistent state
+recovery:
+  # On startup
+  on_startup:
+    - "load_last_snapshot"
+    - "replay_unprocessed_events"
+    - "reconcile_with_broker"
+    - "validate_invariants"
+    - "resume_if_valid"
+    
+  # On broker reconciliation mismatch
+  on_mismatch:
+    action: "ADOPT_BROKER_STATE"
+    reasoning: "Broker is always truth"
+    log_mismatch: true
+    alert_on_mismatch: true
+    
+  # On validation failure
+  on_validation_failure:
+    action: "KILL_SWITCH"
+    reasoning: "Invalid state is unsafe"
+    log_failure: true
+
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multi-instrument state (per-instrument positions, quality scores)
+# - Distributed state (Redis, etcd for multi-process coordination)
+# - Event sourcing (append-only log, CQRS)
+# - State snapshots with delta compression
+# - Real-time state replication for HA
+#
+# v1: Single-process, SQLite, simple snapshots

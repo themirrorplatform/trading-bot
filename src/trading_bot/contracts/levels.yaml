@@ -1,0 +1,193 @@
+# LEVELS CONTRACT
+# Clear level detection and acceptance definition
+
+version: "1.0.0"
+
+# ==========================================
+# CLEAR LEVEL SOURCES
+# ==========================================
+# A "clear level" is a price where supply/demand has demonstrated significance
+level_sources:
+  # Prior session high/low (yesterday's RTH)
+  prior_session:
+    type: "session_high_low"
+    lookback_sessions: 1
+    weight: 1.0
+    recency_decay: 0.9  # Yesterday's levels slightly less important than today's
+    
+  # Opening range high/low (first 15 minutes of today)
+  opening_range:
+    type: "intraday_range"
+    period_minutes: 15
+    start_time: "09:30"
+    weight: 1.2  # Opening range is very significant
+    min_range_points: 2.0  # Ignore if OR is tiny (< 2 points)
+    
+  # Prior day high/low (day before yesterday)
+  prior_day:
+    type: "daily_high_low"
+    lookback_days: 1
+    weight: 0.8
+    recency_decay: 0.85
+    
+  # Overnight high/low (if gap exists)
+  overnight:
+    type: "overnight_high_low"
+    weight: 0.9
+    applicable_if: "gap_exists"
+    
+  # Round numbers (psychological levels)
+  round_numbers:
+    type: "psychological"
+    interval_points: 10  # Every 10 points (e.g., 6000, 6010, 6020)
+    weight: 0.6
+    note: "Less significant than actual support/resistance, but traders watch them"
+    
+  # VWAP bands (fair value reference)
+  vwap_bands:
+    type: "statistical"
+    calculation: "VWAP ± N * stdev"
+    bands:
+      - name: "VWAP_upper_1.5"
+        offset: 1.5  # standard deviations
+        weight: 0.9
+      - name: "VWAP_lower_1.5"
+        offset: -1.5
+        weight: 0.9
+      - name: "VWAP_upper_2.0"
+        offset: 2.0
+        weight: 0.7
+      - name: "VWAP_lower_2.0"
+        offset: -2.0
+        weight: 0.7
+    session_specific: true
+    reset_time: "09:30"
+    
+# ==========================================
+# CLEAR LEVEL DETECTION
+# ==========================================
+detection:
+  # Minimum touches to qualify as "clear"
+  min_touches: 2
+  
+  # Touch definition (proximity buffer)
+  touch_buffer_ticks: 2  # Within 2 ticks counts as "at level"
+  touch_buffer_points: 0.50  # 2 ticks * 0.25 = 0.50 points
+  
+  # Touch types
+  touch_types:
+    - "price_high_reached"  # Bar high within buffer
+    - "price_low_reached"  # Bar low within buffer
+    - "close_at_level"  # Close within buffer
+    - "rejection_from_level"  # Wick touches, close away
+    
+  # Recency weighting (recent touches more important)
+  recency:
+    method: "exponential_decay"
+    decay_factor: 0.8  # Each bar back, multiply by 0.8
+    max_lookback_bars: 120  # 2 hours
+    
+  # Score calculation
+  level_score:
+    formula: "base_weight * touch_count * recency_score"
+    min_score_threshold: 1.5  # Level must score at least 1.5 to be "clear"
+    
+# ==========================================
+# ACCEPTANCE DEFINITION
+# ==========================================
+# Acceptance = price has moved beyond a level and is now staying there
+acceptance:
+  # Basic acceptance (sufficient for most templates)
+  basic:
+    required_closes: 2
+    beyond_threshold_ticks: 1  # Must be at least 1 tick beyond level
+    timeframe: "1min"
+    
+  # Strong acceptance (higher confidence)
+  strong:
+    required_closes: 3
+    beyond_threshold_ticks: 1
+    volume_confirmation: true  # At least one close must have Vol_Z > 0.5
+    timeframe: "1min"
+    
+  # Acceptance failure (level reclaimed)
+  failure:
+    condition: "price returns inside level with 2 closes"
+    invalidates: "acceptance_signal"
+    
+# ==========================================
+# LEVEL INVALIDATION
+# ==========================================
+# Levels can "break down" if ignored repeatedly
+invalidation:
+  # If price crosses level multiple times without reaction
+  ignored_level:
+    condition: "crosses > 5 in last 60 bars without rejection"
+    action: "reduce_weight_by_50%"
+    
+  # If level hasn't been tested in a while
+  stale_level:
+    condition: "no_touch_in_last_120_bars"
+    action: "remove_from_active_levels"
+    
+  # If new structure forms (e.g., new OR after 10:30)
+  superseded:
+    condition: "new_higher_priority_level_formed_nearby"
+    action: "demote_priority"
+    
+# ==========================================
+# ACTIVE LEVELS MANAGEMENT
+# ==========================================
+active_levels:
+  max_active_levels: 12  # Track up to 12 levels at once
+  priority_sorting: "score_descending"
+  
+  # Level clustering (merge nearby levels)
+  clustering:
+    merge_if_within_points: 1.0  # If two levels within 1 point, merge
+    merged_weight: "sum"
+    merged_position: "average"
+    
+  # Level updates (every bar)
+  update_frequency: "every_bar"
+  recalculate_scores: true
+  prune_low_score_levels: true
+  
+# ==========================================
+# LEVEL SIGNALS (Output to Belief Engine)
+# ==========================================
+signals:
+  # Distance to nearest clear level
+  distance_to_nearest_level:
+    unit: "points"
+    normalized: false
+    use_case: "Inform mean reversion belief (F1)"
+    
+  # At clear level (boolean)
+  at_clear_level:
+    buffer_ticks: 2
+    use_case: "Trigger for K2 (level fade)"
+    
+  # Acceptance formed (boolean + direction)
+  acceptance_signal:
+    types: ["basic", "strong"]
+    direction: ["up", "down"]
+    use_case: "Trigger for K3 (acceptance continuation)"
+    
+  # Level broken (but not accepted)
+  breakout_without_acceptance:
+    condition: "price beyond level > 1 tick but < 2 closes"
+    use_case: "Potential trap setup (F4)"
+    
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multi-timeframe levels (5min, 15min, daily)
+# - Volume profile levels (POC, value area)
+# - Order flow levels (large block trades, visible orders)
+# - Options levels (max pain, gamma levels on expiry)
+# - Institutional levels (pension rebalancing levels)
+#
+# v1: Keep to simple price levels + VWAP
+# Framework must extend to any level type with consistent touch/acceptance logic

@@ -1,0 +1,111 @@
+strategy_definition:
+  identity_lock: "Asymmetric setup specialist. Wins by skipping."
+
+  clear_level_definition:
+    sources:
+      prior_session_high_low: true
+      opening_range_high_low: true   # first 15 minutes of RTH
+      prior_day_high_low: true
+      overnight_high_low: true
+      round_numbers_every_points: 10
+      vwap_bands: true               # VWAP ± 1.5 stdev
+    minimum_touches: 2
+    detection_buffer_ticks: 2
+    recency_weight: 0.8
+
+  acceptance_definition:
+    candle_basis: "close"
+    timeframe: "1m"
+    beyond_threshold_ticks: 1
+    required_closes: 2
+    strong_acceptance:
+      required_closes: 3
+      volume_requirement:
+        vol_z_gt: 0.5
+        at_least_one_close: true
+
+  evr_normalization:
+    median_lookback_bars: 100
+    session_specific: true
+    epsilon: 1.0
+
+  session_vwap:
+    primary: "RTH_ONLY"
+    rth_reset_time: "09:30"
+    secondary_overnight_vwap: true
+
+  shock_signature:
+    all_of:
+      - {tr_gt_atr30_mult: 4.0}
+      - {vol_z_gt: 2.5}
+      - {abs_body_gt_stdev60_mult: 3.0}
+
+  attribution_windows:
+    A4_noise_stop_lookforward_bars: 15
+    A2_wrong_timing_lookforward_bars: 30
+
+  capital_tiers:
+    S:
+      equity_lt: 2500
+      allowed_templates: ["K1_VWAP_MR", "K2_FAILED_BREAK_FADE"]
+      max_stop_ticks: 10
+    A:
+      equity_range: [2500, 7500]
+      allowed_templates: ["K1_VWAP_MR", "K2_FAILED_BREAK_FADE", "K3_SWEEP_REVERSAL"]
+      max_stop_ticks: 14
+    B:
+      equity_gt: 7500
+      allowed_templates: ["K1_VWAP_MR","K2_FAILED_BREAK_FADE","K3_SWEEP_REVERSAL","K4_MOMENTUM_CONT"]
+      max_stop_ticks: 18
+
+  exit_philosophy:
+    risk_first: true
+    scale_out:
+      enabled: true
+      first_take_profit_r_multiple: 1.0
+      first_take_profit_fraction: 0.5
+      second_take_profit_r_multiple: 2.0
+      second_take_profit_fraction: 0.5
+    belief_drop_exit_threshold: 0.52
+    trailing_stop:
+      enabled: false
+      exception:
+        template: "K4_MOMENTUM_CONT"
+        tier: "B"
+
+  templates:
+    K1_VWAP_MR:
+      constraint: "F1"
+      time_stop_minutes: 20
+      entry:
+        vwap_z_abs_gte: 1.5
+      stop:
+        buffer_ticks_min: 6
+      target:
+        primary: "VWAP"
+
+    K2_FAILED_BREAK_FADE:
+      constraint: "F4"
+      time_stop_minutes: 15
+      entry:
+        break_ticks_gte: 4
+        return_inside_bars_lte: 3
+      stop:
+        buffer_ticks_min: 5
+
+    K3_SWEEP_REVERSAL:
+      constraint: "F5"
+      time_stop_minutes: 8
+      entry:
+        sweep_ticks_gte: 6
+        snapback_bars_lte: 2
+      stop:
+        buffer_ticks_min: 8
+
+    K4_MOMENTUM_CONT:
+      constraint: "F3"
+      time_stop_minutes: 12
+      entry:
+        breakout_distance_n_gte: 1.0
+      stop:
+        buffer_ticks_min: 6

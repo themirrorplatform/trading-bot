@@ -1,0 +1,306 @@
+# EXECUTION CONTRACT
+# Execution Quality Score (EQS), order types, slippage model, partial fills
+
+version: "1.0.1"
+changelog:
+  v1.0.1:
+    - "Structured EQS degradation/recovery events"
+    - "Aligned EQS gates explicitly to constitution thresholds"
+    - "Structured order types and TTLs"
+    - "Structured slippage adjustments"
+    - "Added explicit timeouts referenced by constitution/state"
+
+# ==========================================
+# EXECUTION QUALITY SCORE (EQS)
+# ==========================================
+# EQS ∈ [0, 1]
+# Degrades quickly on execution issues, recovers slowly
+eqs:
+  initial_value: 1.0
+  calculation_method: "exponential_decay_with_events"
+  clamp_range: [0.0, 1.0]
+  
+  # Epsilon floor for expected_slippage to avoid divide-by-zero
+  slippage_min_expected: 0.0001  # 1e-4, configurable
+  
+  # Degradation events (structured)
+  degradation_events:
+    - id: "ORDER_REJECTED"
+      condition:
+        order_rejected_eq: true
+      immediate_penalty: 0.15
+      recovery_half_life_bars: 20
+      severity: "HIGH"
+
+    - id: "FILL_DELAY"
+      condition:
+        fill_time_minus_order_time_seconds_gt: 60
+      immediate_penalty: 0.08
+      recovery_half_life_bars: 15
+      severity: "MEDIUM"
+
+    - id: "EXCESSIVE_SLIPPAGE"
+      condition:
+        slippage_vs_expected_gt: 2.0
+      immediate_penalty: 0.10
+      recovery_half_life_bars: 15
+      severity: "MEDIUM"
+
+    - id: "PARTIAL_FILL"
+      condition:
+        partial_fill_eq: true
+      immediate_penalty: 0.10
+      recovery_half_life_bars: 20
+      severity: "MEDIUM"
+      note: "Partial fills create execution uncertainty"
+
+    - id: "ORDER_STATE_UNKNOWN"
+      condition:
+        order_state_eq: "UNKNOWN"
+      immediate_penalty: 0.25
+      recovery_half_life_bars: 30
+      severity: "CRITICAL"
+      note: "If persists, triggers kill switch"
+
+    - id: "CONNECTION_DISRUPTION"
+      condition:
+        connection_state_eq: "LOST"
+      immediate_penalty: 0.30
+      recovery_half_life_bars: 40
+      severity: "CRITICAL"
+      
+  # Recovery model
+  recovery:
+    method: "exponential"
+    formula: "EQS[t] = EQS[t-1] + (1 - EQS[t-1]) * (1 - exp(-1/half_life))"
+    note: "Degrades fast, recovers slow"
+    
+# ==========================================
+# EQS GATES (From Constitution)
+# ==========================================
+gates:
+  entry:
+    min_eqs: 0.75
+    action_if_below: "NO_ENTRY"
+    reason_code: "EQS_TOO_LOW"
+    
+  hold:
+    min_eqs: 0.60
+    action_if_below: "TIGHTEN_STOP_OR_MONITOR"
+    reasoning: "Execution environment degraded"
+    
+  kill_switch:
+    min_eqs: 0.30
+    action_if_below: "KILL_SWITCH"
+    reasoning: "Execution too unreliable to continue"
+    
+# ==========================================
+# ORDER TYPES (v1 Restrictions)
+# ==========================================
+order_types:
+  # ENTRY ORDERS
+  entry:
+    allowed_types:
+      - "LIMIT"
+      - "STOP_LIMIT"
+    prohibited_types:
+      - "MARKET"  # Too much slippage risk on entries
+      - "STOP_MARKET"
+      
+    # Limit order rules
+    limit:
+      time_to_live_seconds: 90  # Cancel if not filled in 90s
+      max_modifications: 2  # Can modify price 2x, then cancel and re-evaluate
+      
+    # Stop-limit rules
+    stop_limit:
+      stop_offset_ticks: 1  # Stop price = trigger level
+      limit_offset_ticks: 2  # Limit price = stop + 2 ticks (allow some slippage)
+      time_to_live_seconds: 90
+      
+  # EXIT ORDERS (More Flexible)
+  exit:
+    allowed_types:
+      - "LIMIT"  # Preferred for targets
+      - "STOP_LIMIT"  # Preferred for stops
+      - "MARKET"  # Allowed for emergency exits (kill switch, EOD flatten)
+      - "STOP_MARKET"  # Allowed for stops if limit version fails
+      
+    # Target limit orders
+    target_limit:
+      time_to_live_seconds: 60  # If target not hit in 60s, re-evaluate
+      modification_policy: "adjust_to_market_if_close"
+      
+    # Stop orders
+    stop:
+      type: "STOP_LIMIT"  # Preferred
+      limit_offset_ticks: 2  # Allow 2 ticks slippage
+      fallback_to_market: true  # If stop-limit doesn't fill, use market
+      fallback_delay_seconds: 10
+      
+# ==========================================
+# SLIPPAGE MODEL
+# ==========================================
+slippage:
+  # Baseline (calm market)
+  baseline_ticks: 1
+  baseline_usd: 1.25  # 1 tick * $1.25
+  
+  # Volatility penalties
+  volatility_adjustments:
+    # Moderate vol
+    moderate:
+      condition: "ATR14_norm > 0.70"
+      additional_ticks: 1
+      additional_usd: 1.25
+      
+    # High vol
+    high:
+      condition: "ATR14_norm > 0.85"
+      additional_ticks: 2
+      additional_usd: 2.50
+      
+  # Spread penalties
+  spread_adjustments:
+    wide_spread:
+      condition: "spread_ticks >= 2"
+      additional_ticks: 1
+      additional_usd: 1.25
+      
+    very_wide_spread:
+      condition: "spread_ticks >= 3"
+      additional_ticks: 2
+      additional_usd: 2.50
+      
+  # Time of day adjustments
+  time_adjustments:
+    opening_hour:
+      condition: "09:30 <= time < 10:30"
+      multiplier: 1.5  # 50% more slippage in opening hour
+      
+    close_hour:
+      condition: "15:00 <= time < 16:00"
+      multiplier: 1.3  # 30% more slippage near close
+      
+  # Total slippage estimate
+  calculation:
+    formula: "(baseline + vol_penalty + spread_penalty) * time_multiplier"
+    clamp_max_ticks: 6  # Never assume more than 6 ticks slippage
+    
+# ==========================================
+# PARTIAL FILLS
+# ==========================================
+# v1: Single contract means partials are rare, but must handle
+partial_fills:
+  # Entry partial
+  entry_partial:
+    policy: "accept_and_adjust"
+    action:
+      - "Accept partial fill"
+      - "Adjust stop/target proportionally"
+      - "Set working limit for remainder"
+      - "If remainder not filled in 30s, cancel and re-evaluate"
+      
+  # Stop partial
+  stop_partial:
+    policy: "market_remainder_immediately"
+    action:
+      - "Accept partial fill"
+      - "MARKET order for remainder NOW"
+      - "Do not wait"
+    reasoning: "Stop is risk control; must exit fully"
+    
+  # Target partial
+  target_partial:
+    policy: "leave_limit_working_briefly"
+    action:
+      - "Accept partial fill"
+      - "Leave limit working for 60s"
+      - "If not filled, MARKET remainder"
+    reasoning: "Target is profit-taking; give it a moment, then take what's available"
+    
+  # EQS impact
+  eqs_degradation:
+    penalty_per_partial: 0.10
+    lookback_bars: 20  # Degrade EQS if partials in last 20 bars
+    
+# ==========================================
+# ORDER STATE MANAGEMENT
+# ==========================================
+order_states:
+  # Valid states
+  valid:
+    - "PENDING"  # Sent but not confirmed
+    - "WORKING"  # Confirmed by broker, in market
+    - "FILLED"  # Fully filled
+    - "PARTIAL"  # Partially filled
+    - "CANCELLED"  # Cancelled
+    - "REJECTED"  # Rejected by broker
+    
+  # Critical: Unknown state
+  unknown:
+    trigger: "broker_response_timeout OR inconsistent_state"
+    action: "KILL_SWITCH"
+    reasoning: "Cannot trade if we don't know order status"
+    
+  # State transitions (must be tracked)
+  transitions:
+    - "PENDING → WORKING"
+    - "PENDING → REJECTED"
+    - "WORKING → FILLED"
+    - "WORKING → PARTIAL → FILLED"
+    - "WORKING → CANCELLED"
+    - "PARTIAL → CANCELLED"
+    
+# ==========================================
+# CONNECTION HANDLING
+# ==========================================
+connection:
+  # Disconnect policy
+  disconnect:
+    immediate_action: "KILL_SWITCH"
+    reasoning: "Cannot manage risk without connection"
+    
+  # Reconnection
+  reconnection:
+    policy: "exponential_backoff"
+    max_attempts: 5
+    backoff_seconds: [2, 4, 8, 16, 32]
+    
+    # On successful reconnect
+    on_reconnect:
+      - "Reconcile positions (broker is truth)"
+      - "Reconcile working orders"
+      - "If any mismatch: KILL_SWITCH"
+      - "Degrade EQS by 0.20"
+      - "Require manual approval to resume trading"
+      
+# ==========================================
+# ORDER BOOK / MARKET MICROSTRUCTURE
+# ==========================================
+# v1: No direct market depth access (retail limitation)
+# Must infer from price action
+market_microstructure:
+  queue_position: "unknown"  # Retail traders are back of queue
+  liquidity_inference:
+    method: "spread_and_volume"
+    spread_proxy: "(ask - bid) / tick_size"
+    volume_proxy: "bar_volume"
+    
+  # Liquidity gates (inferred)
+  liquidity_check:
+    min_volume_per_minute: 1000  # MES typically 5k-20k; 1k is thin
+    max_spread_ticks: 3  # If spread > 3 ticks, liquidity is poor
+    
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multiple contracts → need partial fill orchestration across contracts
+# - Multiple instruments → per-instrument EQS
+# - Direct market access → queue position tracking, aggressive orders
+# - Options → complex order types (spreads, combos)
+# - Portfolio → correlated execution (all-or-none across legs)
+#
+# v1: Keep simple, single contract MES
+# But execution framework must extend to complex multi-leg execution

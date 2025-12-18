@@ -1,0 +1,209 @@
+# DATA CONTRACT
+# Data Validity Score (DVS) definition, penalties, gates
+
+version: "1.0.1"
+changelog:
+  v1.0.1:
+    - "Structured penalties as list with ids, conditions, weights (testable)"
+    - "Added canonical_source flag + fail_closed policy"
+    - "Made DVS rolling rule explicit and computable"
+    - "Bound thresholds to constitution refs"
+
+# ==========================================
+# DATA STRUCTURE (1-Minute Bars)
+# ==========================================
+bar_structure:
+  timeframe: "1min"
+  required_fields:
+    - "timestamp"  # ISO 8601 or Unix epoch, monotonic increasing
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+    
+  optional_fields:
+    - "bid"  # Best bid at bar close
+    - "ask"  # Best ask at bar close
+    - "trades"  # Number of trades in bar
+    - "delta"  # Buy volume - sell volume (if available)
+    - "open_interest"  # For futures
+    
+  # Timestamp requirements
+  timestamp:
+    format: "ISO8601"  # Or Unix epoch millis
+    timezone: "US/Eastern"
+    must_be_monotonic: true
+    max_gap_seconds: 90  # More than 90s gap = data issue
+    fail_closed: true
+    
+# ==========================================
+# DATA VALIDITY SCORE (DVS)
+# ==========================================
+# DVS ∈ [0, 1]
+# Start at 1.0, subtract penalties, clamp to [0, 1]
+dvs:
+  initial_value: 1.0
+  calculation_method: "additive_penalties"
+  clamp_range: [0.0, 1.0]
+  
+  # Degradation events (cumulative within bar, structured and testable)
+  degradation_events:
+    - id: "MISSING_GAP"
+      condition: "timestamp_gap_seconds > 90"
+      penalty: 0.50
+      severity: "HIGH"
+
+    - id: "TIMESTAMP_REGRESSION"
+      condition: "timestamp[i] <= timestamp[i-1]"
+      penalty: 0.50
+      severity: "HIGH"
+
+    - id: "ZERO_VOLUME_RTH"
+      condition: "volume == 0 AND is_rth_hour == true"
+      penalty: 0.20
+      severity: "MEDIUM"
+
+    - id: "OUTLIER_NO_SHOCK"
+      condition: "true_range > 6 * ATR30 AND shock_detected == false"
+      penalty: 0.20
+      severity: "MEDIUM"
+      reasoning: "Huge bar without shock signature suggests data issue"
+
+    - id: "LATE_BAR"
+      condition: "delivery_delay_seconds > 5"
+      penalty: 0.20
+      severity: "MEDIUM"
+      applies_to: "live_only"
+
+    - id: "STUCK_FEED"
+      condition: "close[i] == close[i-1] AND close[i-1] == close[i-2] AND volume[i] > 0"
+      penalty: 0.30
+      severity: "HIGH"
+
+    - id: "SPREAD_ANOMALY"
+      condition: "spread_ticks > 10"
+      penalty: 0.15
+      severity: "LOW"
+      note: "Execution would be terrible; treat as data caution"
+      
+  # DVS aggregation (rolling window)
+  rolling_window:
+    bars: 10
+    method: "minimum"  # DVS = min(DVS over last N bars)
+    reasoning: "One bad bar taints the next 10 bars' quality"
+    fail_closed: true
+    
+# ==========================================
+# DVS GATES (From Constitution)
+# ==========================================
+gates:
+  entry:
+    min_dvs: 0.80  # must equal constitution.dvs_gates.min_dvs_for_entry
+    action_if_below: "NO_ENTRY"
+    reason_code: "DVS_TOO_LOW"
+    
+  hold:
+    min_dvs: 0.60  # must equal constitution.dvs_gates.min_dvs_for_hold
+    action_if_below: "TIGHTEN_STOP_OR_EXIT"
+    reasoning: "Data quality degraded; don't trust new signals, but don't panic exit"
+    
+  kill_switch:
+    min_dvs: 0.30  # must equal constitution.dvs_gates.kill_switch_dvs_threshold
+    action_if_below: "KILL_SWITCH"
+    reasoning: "Data is too corrupt to trust anything"
+    
+# ==========================================
+# DATA SOURCE REQUIREMENTS
+# ==========================================
+data_source:
+  # Live
+  live:
+    provider: "Tradovate"  # Or other broker
+    feed_type: "WebSocket"
+    expected_latency_ms: 100  # Retail typical
+    failover: "Reconnect with exponential backoff"
+    
+  # Historical (for replay/backtest)
+  historical:
+    source: "CSV"  # Or database
+    min_lookback_bars: 10000  # For ATR, VWAP, signal baselines
+    required_fields: ["timestamp", "open", "high", "low", "close", "volume"]
+    fail_closed: true
+    
+# ==========================================
+# DATA TRANSFORMATIONS
+# ==========================================
+transformations:
+  # True range (for ATR, outlier detection)
+  true_range:
+    formula: "max(high - low, abs(high - prev_close), abs(low - prev_close))"
+    
+  # Typical price (for VWAP)
+  typical_price:
+    formula: "(high + low + close) / 3"
+    
+  # Session VWAP (RTH only)
+  vwap:
+    reset_time: "09:30"
+    formula: "cumsum(typical_price * volume) / cumsum(volume)"
+    session_specific: true
+    
+# ==========================================
+# MISSING DATA POLICY
+# ==========================================
+missing_data:
+  # If bar is missing entirely
+  missing_bar_policy: "forward_fill_once_then_invalid"
+  max_forward_fill_bars: 1  # Can forward-fill 1 bar, then DVS penalty
+  fail_closed_if_sequence_breaks: true
+  
+  # If field is missing (e.g., volume = null)
+  missing_field_policy: "use_zero_or_previous"
+  volume_missing: 0  # Treat as 0 volume
+  ohlc_missing: "forward_fill_from_previous_close"
+  
+# ==========================================
+# DATA INTEGRITY CHECKS (Sanity)
+# ==========================================
+integrity_checks:
+  # OHLC relationship
+  ohlc_sanity:
+    rules:
+      - "low <= open <= high"
+      - "low <= close <= high"
+      - "low <= high"
+    fail_action: "REJECT_BAR"
+    fail_closed: true
+    
+  # Volume sanity
+  volume_sanity:
+    min_value: 0
+    max_value: 10000000  # 10M contracts in 1 minute is implausible
+    fail_action: "DVS_PENALTY_0.20"
+    fail_closed_if_negative: true
+    
+  # Price sanity (MES typically 4000-7000 range as of 2025)
+  price_sanity:
+    min_price: 1000  # Well below realistic
+    max_price: 10000  # Well above realistic
+    fail_action: "REJECT_BAR"
+    
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Multiple instruments → need per-instrument DVS
+# - Tick data → different DVS model (count, sequence gaps)
+# - Order book data → additional quality checks (depth, queue)
+# - Alternative data → custom DVS per source
+#
+# DVS framework must extend to any data type
+# Core principle: "Do not trust data blindly; quantify its trustworthiness"
+
+# Canonical source + fail-closed policy
+canonical_source: true
+fail_closed_policy:
+  on_missing_contract: "HALT_OR_OBSERVE_ONLY"  # constitution expects observe-only
+  on_parse_error: "OBSERVE_ONLY"
+  on_missing_fields: "OBSERVE_ONLY"

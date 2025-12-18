@@ -1,0 +1,33 @@
+data_contract:
+  primary_feed: "BROKER_FEED"
+  bar_type: "1_MIN_OHLCV"
+  timestamp_policy:
+    expected_monotonic: true
+    max_gap_seconds: 90
+    late_bar_threshold_seconds: 5
+
+  integrity_rules:
+    invalid_if:
+      - "missing_bar_gap_gt_90s"
+      - "timestamp_non_monotonic"
+      - "negative_or_nan_price"
+      - "high_lt_low"
+    suspicious_if:
+      - "volume_eq_0_during_rth"
+      - "true_range_gt_6x_ATR30_without_shock_signature"
+
+  dvs:
+    start: 1.0
+    penalties:
+      missing_bar_gap: 0.50
+      timestamp_non_monotonic: 0.50
+      volume_zero_rth: 0.20
+      outlier_bar_no_shock_flag: 0.20
+      late_bar: 0.20
+      stuck_print_proxy: 0.30
+    clamp: [0.0, 1.0]
+
+  gating:
+    entries_require_dvs_gte: 0.80
+    holding_requires_dvs_gte: 0.60
+    dvs_lt_0_30_action: "KILL_SWITCH"

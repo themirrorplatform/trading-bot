@@ -1,0 +1,261 @@
+# SIGNALS CONTRACT
+# Complete signal dictionary for MES survival bot v1
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial signal contract"
+    - "Lock all belief-driving and gate-driving signals"
+    - "Defer optional signals to v2+"
+
+# ==========================================
+# SIGNAL ARCHITECTURE
+# ==========================================
+# All signals return: {value, reliability, diagnostics}
+# value: signal output (bounded to declared range)
+# reliability: confidence in this signal [0, 1]
+# diagnostics: optional debug info
+
+# SIGNAL TYPES:
+# - raw: direct from market data
+# - derived: computed from other signals
+# - normalized: scaled to [-1, +1]
+# - metric: unbounded (for diagnostics/logging)
+
+# ==========================================
+# SESSION & CONTEXT SIGNALS (Gate-Driving)
+# ==========================================
+session_context:
+  - id: "session_phase"
+    type: "raw"
+    output_range: [0, 7]
+    description: "Market context phase per session.yaml"
+    phases:
+      0: "PRE_MARKET"
+      1: "OPENING"  # 09:30-10:30
+      2: "MID_MORNING"  # 10:30-11:30
+      3: "LUNCH"  # 11:30-13:30 (no-trade)
+      4: "AFTERNOON"  # 13:30-15:00
+      5: "CLOSE"  # 15:00-16:00
+      6: "POST_RTH"  # After 16:00
+      7: "UNKNOWN"  # Fail-closed
+    availability: "always"
+    missing_policy: "return_7_unknown"
+    required: true
+    
+  - id: "no_trade_window_active"
+    type: "gate"
+    output_range: [0, 1]  # 0=allowed, 1=blocked
+    description: "Gate signal for no-trade windows"
+    inputs: ["session.no_trade_windows", "calendar"]
+    availability: "always"
+    missing_policy: "return_1_blocked"
+    required: true
+    
+  - id: "flatten_time_active"
+    type: "gate"
+    output_range: [0, 1]
+    description: "15:55 flatten deadline reached"
+    availability: "RTH"
+    missing_policy: "return_0"
+    required: true
+
+# ==========================================
+# PRICE STRUCTURE SIGNALS (Belief-Driving)
+# ==========================================
+price_structure:
+  - id: "vwap_distance_ticks"
+    type: "metric"
+    output_range: "unbounded"
+    description: "Signed distance from VWAP in ticks (close - VWAP)"
+    inputs: ["bars_1m_RTH", "VWAP_RTH"]
+    compute_window: "session_cumulative"
+    availability: "RTH"
+    missing_policy: "return_None_DVS_penalty"
+    required: true
+    notes:
+      - "VWAP resets at 09:30 RTH open"
+      - "Uses typical price: (H+L+C)/3"
+      - "Only RTH bars contribute"
+    
+  - id: "vwap_distance_norm"
+    type: "normalized"
+    output_range: [-1, 1]
+    description: "VWAP distance normalized by ATR14"
+    formula: "clamp(vwap_distance / ATR14, -1, +1)"
+    inputs: ["vwap_distance_ticks", "atr14"]
+    availability: "RTH"
+    missing_policy: "return_0"
+    required: true
+    
+  - id: "range_position"
+    type: "normalized"
+    output_range: [-1, 1]
+    description: "Where price sits in recent range (-1=low, +1=high)"
+    formula: "(close - range_low) / (range_high - range_low) * 2 - 1"
+    compute_window: 30
+    availability: "RTH"
+    missing_policy: "return_0"
+    required: false  # v2+
+
+# ==========================================
+# VOLATILITY SIGNALS (Belief + Gate Driving)
+# ==========================================
+volatility:
+  - id: "atr14"
+    type: "metric"
+    output_range: "positive"
+    description: "ATR(14) using Wilder smoothing"
+    formula: "Wilder EMA: ATR_t = (ATR_prev * 13 + TR) / 14"
+    compute_window: 14
+    inputs: ["bars_1m"]
+    availability: "always"
+    missing_policy: "return_None_until_warmup"
+    required: true
+    notes:
+      - "Warmup period: 14 bars"
+      - "Uses Wilder smoothing, not SMA"
+    
+  - id: "atr30"
+    type: "metric"
+    output_range: "positive"
+    description: "ATR(30) using Wilder smoothing"
+    compute_window: 30
+    inputs: ["bars_1m"]
+    availability: "always"
+    missing_policy: "return_None_until_warmup"
+    required: true
+    
+  - id: "tr_over_atr30"
+    type: "metric"
+    output_range: "positive"
+    description: "True range as multiple of ATR30 (shock input)"
+    formula: "current_TR / ATR30"
+    inputs: ["bars_1m", "atr30"]
+    availability: "always"
+    missing_policy: "return_None"
+    required: true
+    notes:
+      - "Values > 6.0 trigger shock signature check"
+    
+  - id: "shock_signature_detected"
+    type: "gate"
+    output_range: [0, 1]
+    description: "A6 shock condition met (TR > 6*ATR30 + volume surge)"
+    inputs: ["tr_over_atr30", "volume_z"]
+    availability: "always"
+    missing_policy: "return_0"
+    required: true
+
+# ==========================================
+# VOLUME / PARTICIPATION SIGNALS
+# ==========================================
+volume:
+  - id: "volume_z"
+    type: "metric"
+    output_range: "unbounded"
+    description: "Volume z-score vs lookback window"
+    formula: "(volume - mean_volume) / std_volume"
+    compute_window: 60
+    inputs: ["bars_1m"]
+    availability: "always"
+    missing_policy: "return_0"
+    required: true
+    
+  - id: "evr"
+    type: "metric"
+    output_range: "positive"
+    description: "Efficiency vs volume ratio (price_move / volume)"
+    formula: "abs(close - open) / volume"
+    inputs: ["bars_1m"]
+    availability: "always"
+    missing_policy: "return_None"
+    required: false  # v2+
+
+# ==========================================
+# MARKET MICROSTRUCTURE (Execution Quality)
+# ==========================================
+microstructure:
+  - id: "spread_ticks"
+    type: "metric"
+    output_range: "positive_integer"
+    description: "Bid-ask spread in ticks"
+    inputs: ["orderbook_L1"]
+    availability: "live_only"
+    missing_policy: "return_None_DVS_penalty"
+    required: true
+    validation:
+      - "Must be exact multiple of tick_size"
+      - "Invalid if bid >= ask"
+      - "Return None if missing"
+    
+  - id: "slippage_estimate_ticks"
+    type: "metric"
+    output_range: "positive"
+    description: "Expected slippage in ticks (execution_danger input)"
+    formula: "spread_ticks/2 + spread_widening_adjustment"
+    inputs: ["spread_ticks", "volume_thinness"]
+    availability: "live_only"
+    missing_policy: "return_2_ticks_pessimistic"
+    required: true
+
+# ==========================================
+# LEVEL / STRUCTURE SIGNALS (Future)
+# ==========================================
+levels:
+  - id: "clear_level_proximity"
+    type: "metric"
+    output_range: "positive"
+    description: "Distance to nearest clear level in ticks"
+    status: "v2+"
+    required: false
+    
+  - id: "acceptance_state"
+    type: "normalized"
+    output_range: [-1, 1]
+    description: "Price acceptance beyond level (2-close rule)"
+    status: "v2+"
+    required: false
+
+# ==========================================
+# SIGNAL REGISTRY RULES
+# ==========================================
+registry_rules:
+  # All signals must be registered
+  unregistered_signal_policy: "fail_closed_error"
+  
+  # Output validation
+  validate_output_range: true
+  clamp_on_overflow: true  # Clamp to declared range, log warning
+  
+  # Missing data
+  missing_reliability_default: 0.0  # If signal returns None
+  
+  # Timezone
+  timezone: "America/New_York"
+  
+  # RTH definition
+  rth_open: "09:30"
+  rth_close: "16:00"
+  
+  # VWAP reset rule
+  vwap_reset_time: "09:30"
+  vwap_price_basis: "typical"  # (H+L+C)/3
+  vwap_bars: "RTH_only"
+
+# ==========================================
+# V1 SIGNAL COUNT
+# ==========================================
+# Required: 11 signals
+# Optional (defer to v2+): 4 signals
+# Total specified: 15 signals
+
+# Missing from original "28 target":
+#   - Delta/imbalance proxies (need L2 data)
+#   - Clear level detection (needs refactor)
+#   - Return signals (simple to add)
+#   - Acceptance/rejection (v2+)
+#   - Slope/EMA (defer)
+#   - Lunch void score (defer)
+#   - EVR_z (defer)
+# These are explicitly marked for v2+ to avoid incomplete v1.

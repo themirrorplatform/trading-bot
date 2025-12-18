@@ -1,0 +1,230 @@
+# RISK MODEL
+# Per-trade, per-day limits, kill-switch integration, drawdown curves
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial risk model for MES v1"
+    - "Per-trade and per-day risk limits"
+    - "Kill-switch thresholds aligned to constitution"
+    - "Drawdown tracking and limits"
+
+# ==========================================
+# PER-TRADE RISK
+# ==========================================
+per_trade_risk:
+  # Maximum risk per single trade
+  max_risk_usd: 5.00  # $5 max loss per trade (4 ticks * $1.25)
+  max_risk_ticks: 4
+  
+  # Position sizing constraint
+  max_contracts_per_trade: 1  # v1 restriction
+  
+  # Stop placement
+  min_stop_distance_ticks: 2  # Don't set stops < 2 ticks
+  max_stop_distance_ticks: 10  # Don't set stops > 10 ticks
+  
+  # Validation
+  enforce_stop_required: true  # Every entry must have a stop
+
+# ==========================================
+# PER-DAY RISK
+# ==========================================
+per_day_risk:
+  # Daily loss limit
+  max_daily_loss_usd: 50.00  # $50 max loss per day
+  max_daily_loss_percent: 0.05  # 5% of account (if tracking equity)
+  
+  # Trade count limits
+  max_trades_per_day: 10  # Cap at 10 trades to avoid overtrading
+  
+  # Losing streak limits
+  max_consecutive_losses: 3  # After 3 losses, pause trading
+  pause_after_losses_minutes: 60  # Pause for 1 hour after streak
+  
+  # Action on daily limit breach
+  action_on_breach: "KILL_SWITCH"  # Stop all trading for the day
+  require_manual_resume: true
+
+# ==========================================
+# DRAWDOWN TRACKING
+# ==========================================
+drawdown:
+  # Track peak equity and current drawdown
+  track_intraday_drawdown: true
+  track_equity_curve: true
+  
+  # Drawdown thresholds (from peak)
+  max_intraday_drawdown_usd: 50.00  # Same as daily loss
+  max_intraday_drawdown_percent: 0.05
+  
+  # Action on drawdown breach
+  action_on_drawdown_breach: "KILL_SWITCH"
+  
+  # Recovery requirements
+  require_positive_trade_before_resume: false  # v1: manual resume only
+
+# ==========================================
+# POSITION LIMITS
+# ==========================================
+position_limits:
+  # Maximum position size
+  max_net_position: 1  # v1: single contract only
+  max_gross_position: 1
+  
+  # No overnight positions
+  allow_overnight: false
+  flatten_before_close: true
+  flatten_time: "15:55"  # From session.yaml
+  
+  # Multiple entries
+  allow_adding_to_position: false  # v1: single entry only
+  allow_scaling_out: false  # v1: exit full position only
+
+# ==========================================
+# KILL-SWITCH INTEGRATION
+# ==========================================
+kill_switch:
+  # Conditions that trigger kill switch (from constitution)
+  triggers:
+    - id: "DVS_CRITICAL"
+      condition:
+        dvs_lt: 0.30
+      reasoning: "Data quality too low"
+      
+    - id: "EQS_CRITICAL"
+      condition:
+        eqs_lt: 0.30
+      reasoning: "Execution quality too low"
+      
+    - id: "DAILY_LOSS_LIMIT"
+      condition:
+        daily_loss_gte: 50.00
+      reasoning: "Daily loss limit reached"
+      
+    - id: "DRAWDOWN_LIMIT"
+      condition:
+        intraday_drawdown_gte: 50.00
+      reasoning: "Intraday drawdown limit reached"
+      
+    - id: "CONSECUTIVE_LOSSES"
+      condition:
+        consecutive_losses_gte: 3
+      reasoning: "Too many consecutive losses"
+      
+    - id: "CONNECTION_LOSS"
+      condition:
+        connection_state_eq: "LOST"
+      reasoning: "Cannot manage risk without connection"
+      
+    - id: "ORDER_STATE_UNKNOWN"
+      condition:
+        order_state_eq: "UNKNOWN"
+      reasoning: "Cannot trade with unknown order status"
+      
+  # Kill switch behavior
+  action_on_trigger: "HALT_TRADING"
+  flatten_existing_positions: true
+  cancel_working_orders: true
+  require_manual_resume: true
+  
+  # Logging
+  log_kill_switch_trigger: true
+  alert_on_trigger: true
+
+# ==========================================
+# RISK CHECKS (Pre-Trade)
+# ==========================================
+# Gates that must pass before entry
+pre_trade_checks:
+  - id: "DVS_GATE"
+    type: "dvs_gte"
+    threshold: 0.75
+    required: true
+    
+  - id: "EQS_GATE"
+    type: "eqs_gte"
+    threshold: 0.75
+    required: true
+    
+  - id: "DAILY_LOSS_CHECK"
+    type: "daily_loss_lt"
+    threshold: 50.00
+    required: true
+    
+  - id: "DAILY_TRADE_COUNT_CHECK"
+    type: "trade_count_lt"
+    threshold: 10
+    required: true
+    
+  - id: "NO_CONSECUTIVE_LOSS_STREAK"
+    type: "consecutive_losses_lt"
+    threshold: 3
+    required: true
+    
+  - id: "SESSION_ALLOWED"
+    type: "session_gate"
+    reasoning: "No trading during no-trade windows"
+    required: true
+    
+  - id: "NO_KILL_SWITCH"
+    type: "kill_switch_active_eq"
+    value: false
+    required: true
+
+# ==========================================
+# POSITION MONITORING (In-Trade)
+# ==========================================
+# Checks while position is held
+in_trade_checks:
+  - id: "DVS_HOLD_GATE"
+    type: "dvs_gte"
+    threshold: 0.60
+    action_if_fail: "TIGHTEN_STOP"
+    
+  - id: "EQS_HOLD_GATE"
+    type: "eqs_gte"
+    threshold: 0.60
+    action_if_fail: "TIGHTEN_STOP"
+    
+  - id: "SESSION_ACTIVE"
+    type: "session_gate"
+    action_if_fail: "FLATTEN_IMMEDIATELY"
+    
+  - id: "FLATTEN_TIME_CHECK"
+    type: "time_lt"
+    value: "15:55"
+    action_if_fail: "FLATTEN_IMMEDIATELY"
+
+# ==========================================
+# RISK METRICS TRACKING
+# ==========================================
+metrics:
+  track:
+    - "daily_pnl"
+    - "daily_trades"
+    - "consecutive_wins"
+    - "consecutive_losses"
+    - "win_rate"
+    - "avg_win"
+    - "avg_loss"
+    - "profit_factor"
+    - "max_intraday_drawdown"
+    - "sharpe_ratio_intraday"
+    
+  # Reporting frequency
+  report_frequency: "per_trade"
+  log_metrics: true
+
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - Per-strategy risk budgets
+# - Dynamic position sizing (Kelly, volatility-scaled)
+# - Portfolio-level risk (correlation, exposure)
+# - Multi-instrument risk aggregation
+# - Real-time VaR/CVaR
+# - Adaptive stop placement
+#
+# v1: Fixed sizing, single instrument, simple limits

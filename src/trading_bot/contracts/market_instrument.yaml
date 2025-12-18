@@ -1,0 +1,145 @@
+# MARKET INSTRUMENT
+# Instrument specifications for MES (Micro E-mini S&P 500)
+
+version: "1.0.0"
+changelog:
+  v1.0.0:
+    - "Initial instrument spec for MES"
+    - "Tick size, value, margin requirements"
+    - "Trading hours and contract specs"
+
+# ==========================================
+# INSTRUMENT IDENTIFICATION
+# ==========================================
+instrument:
+  symbol: "MES"
+  name: "Micro E-mini S&P 500 Futures"
+  exchange: "CME"
+  asset_class: "equity_index_futures"
+  product_code: "MES"
+  
+  # Contract specifications
+  contract_size: "$5 × S&P 500 Index"
+  contract_size_multiplier: 5.0
+  tick_size: 0.25  # 0.25 index points
+  tick_value_usd: 1.25  # $1.25 per tick (0.25 × $5)
+  point_value_usd: 5.00  # $5 per 1 point
+  
+  # Currency
+  currency: "USD"
+  
+  # Instrument type
+  type: "futures"
+  continuous: false  # Requires roll management (future)
+  
+  # Display precision
+  price_precision: 2  # Display to 2 decimal places
+  
+  # Margin (approximate; broker-specific)
+  initial_margin_usd: 1350.00  # Approximate as of 2024
+  maintenance_margin_usd: 1200.00  # Approximate
+  day_trading_margin_usd: 500.00  # Approximate, broker-dependent
+  
+  # Liquidity characteristics
+  typical_spread_ticks: 1  # Usually 1 tick during liquid hours
+  wide_spread_threshold_ticks: 2  # Spreads > 2 ticks indicate poor liquidity
+  typical_daily_volume_contracts: 500000  # Highly liquid
+  min_volume_per_minute: 1000
+  
+# ==========================================
+# ==========================================
+# TRADING HOURS
+# ==========================================
+# Reference: session.yaml for trading policy
+trading_hours:
+  # Primary session (Regular Trading Hours)
+  rth:
+    open_time: "09:30"
+    close_time: "16:00"
+    timezone: "US/Eastern"
+    
+  # Extended Trading Hours (not used in v1)
+  eth:
+    enabled: false
+    sunday_open_time: "18:00"
+    weekday_open_time: "18:00"
+    weekday_close_time: "09:30"
+    timezone: "US/Eastern"
+    
+  # v1 policy
+  trading_sessions: ["RTH"]  # Only trade RTH
+  allow_overnight: false
+
+# ==========================================
+# CONTRACT ROLL
+# ==========================================
+# MES futures require quarterly roll
+# v1: Manual roll management
+roll:
+  contract_months: ["H", "M", "U", "Z"]  # Mar, Jun, Sep, Dec
+  
+  # Roll policy (future implementation)
+  roll_days_before_expiry: 5
+  roll_method: "manual"  # v1: manual only
+  
+  # Current contract (update manually)
+  current_contract: "MESH25"  # March 2025
+  expiry_date: "2025-03-21"
+
+# ==========================================
+# FEES & COMMISSIONS
+# ==========================================
+# Broker-dependent; these are estimates
+fees:
+  # Per-contract fees (round trip)
+  commission_per_contract_usd: 1.50  # Approximate
+  exchange_fees_usd: 1.28  # CME + NFA fees
+  total_per_contract_round_trip_usd: 2.78
+  
+  # Spread cost (paid when crossing spread)
+  typical_spread_cost_usd: 1.25  # 1 tick
+  wide_spread_cost_usd: 2.50  # 2 ticks in volatility
+  
+  # Slippage estimates (from execution_contract)
+  baseline_slippage_ticks: 1
+  baseline_slippage_usd: 1.25
+  
+  # Total realistic costs
+  realistic_roundtrip_usd: 4.75  # Commission + spread + baseline slippage
+  pessimistic_roundtrip_usd: 9.00  # Commission + wide spread + high slippage
+
+# ==========================================
+# RISK PARAMETERS
+# ==========================================
+# Instrument-specific risk constraints
+risk:
+  # Maximum position size (v1)
+  max_position_size: 1  # Single contract only
+  
+  # Per-trade risk (aligned with risk_model.yaml)
+  max_risk_per_trade_ticks: 4
+  max_risk_per_trade_usd: 5.00
+  
+  # Stop constraints
+  min_stop_distance_ticks: 2
+  max_stop_distance_ticks: 10
+  
+  # Margin buffer (extra capital beyond maintenance)
+  margin_buffer_percent: 0.50  # 50% buffer recommended
+    
+# ==========================================
+# SCALABILITY NOTES
+# ==========================================
+# As capital grows:
+# - Tier S/A/B: Trade MES (1 contract)
+# - Tier C: Consider 2-3 MES contracts OR transition to ES
+# - Tier D+: ES (1-2 contracts) offers better spread/commission ratio at scale
+# - Tier E+: ES (multiple contracts) + portfolio strategies
+#
+# System must handle:
+# - Multiple contracts per signal
+# - Position scaling (add to winners)
+# - Instrument migration (MES → ES)
+# - Portfolio correlation management
+#
+# But v1 is single MES contract only.

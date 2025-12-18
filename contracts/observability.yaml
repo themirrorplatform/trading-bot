@@ -1,0 +1,44 @@
+observability:
+  storage: "SQLITE_APPEND_ONLY_EVENT_LOG"
+  replay_required: true
+
+  log_every_bar:
+    - timestamp
+    - ohlcv
+    - signals_vector
+    - beliefs_vector_tier1
+    - stability_vector_tier1
+    - DVS
+    - EQS
+    - friction_regime_index
+    - eligibility_decision
+    - no_trade_reason_code
+
+  log_every_order:
+    - intent_id
+    - template_id
+    - constraint_id
+    - belief_snapshot
+    - order_id
+    - order_type
+    - prices
+    - fills
+    - slippage_ticks
+    - exit_reason
+
+  dashboards_minimum:
+    - "daily_skip_reasons_histogram"
+    - "daily_friction_costs"
+    - "weekly_attribution_counts_A0_A9"
+    - "weekly_process_score_distribution"
+
+  alerts:
+    kill_switch:
+      - "OrderStateDesync"
+      - "UnexpectedPositionDetected"
+      - "DVS_LT_0_30"
+      - "EQS_LT_0_30"
+    auto_pause:
+      - "MAX_CONSECUTIVE_LOSSES"
+      - "VOL_SHOCK_LOCKOUT"
+      - "DAILY_LOSS_LIMIT"

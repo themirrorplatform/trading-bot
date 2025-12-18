@@ -1,0 +1,174 @@
+# SESSION SPECIFICATION
+# Temporal structure, no-trade windows, session-specific behavior
+
+version: "1.0.1"
+changelog:
+  v1.0.1:
+    - "Canonicalized no-trade windows as structured entries (testable, computable)"
+    - "Explicitly marked session.yaml as single source of truth for temporal gates"
+    - "Added fallback and fail-closed behaviors for missing/unknown schedule"
+
+# ==========================================
+# SESSION DEFINITION
+# ==========================================
+session:
+  primary_session: "RTH"  # Regular Trading Hours
+  timezone: "US/Eastern"
+  
+  # RTH schedule
+  rth:
+    open_time: "09:30"
+    close_time: "16:00"
+    trading_days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    
+  # No overnight positions
+  flatten_before_close: true
+  flatten_time: "15:55"  # 5 minutes before close
+  canonical_source: true  # Constitution references this file for all session gates
+  
+# ==========================================
+# NO-TRADE WINDOWS (Session Gates)
+# ==========================================
+# Explicit windows where trading is blocked (structured, testable)
+no_trade_windows:
+  - id: "OPENING_BLOCK"
+    enabled: true
+    start_time: "09:30"
+    end_time: "09:35"
+    reason: "Opening auction volatility; wait for structure"
+
+  - id: "LUNCH_BLOCK"
+    enabled: true
+    start_time: "11:30"
+    end_time: "13:30"
+    reason: "Low participation / directional ambiguity"
+
+  - id: "CLOSE_BLOCK"
+    enabled: true
+    start_time: "15:55"
+    end_time: "16:00"
+    reason: "Flatten deadline; no new positions near close"
+
+# Fail-closed behavior: if this section fails to load, trading is disallowed
+no_trade_windows_fail_closed: true
+    
+# ==========================================
+# SESSION PHASES (For Context)
+# ==========================================
+# Used by SessionPhase signal for regime awareness
+session_phases:
+  # Phase 0: Pre-market (not trading, but observe for gap context)
+  pre_market:
+    start_time: "08:00"
+    end_time: "09:30"
+    phase_code: 0
+    
+  # Phase 1: Opening hour (09:30-10:30)
+  opening:
+    start_time: "09:30"
+    end_time: "10:30"
+    phase_code: 1
+    characteristics:
+      - "High volume"
+      - "Volatility auction"
+      - "Opening range formation"
+      - "Institutional positioning"
+    
+  # Phase 2: Mid-morning (10:30-11:30)
+  mid_morning:
+    start_time: "10:30"
+    end_time: "11:30"
+    phase_code: 2
+    characteristics:
+      - "Trend or range becomes clear"
+      - "Follow-through or fade"
+      - "Best phase for mean reversion (F1)"
+    
+  # Phase 3: Lunch void (11:30-13:30) - NO TRADE
+  lunch:
+    start_time: "11:30"
+    end_time: "13:30"
+    phase_code: 3
+    characteristics:
+      - "Low participation"
+      - "Choppy, directionless"
+      - "AVOID"
+    
+  # Phase 4: Afternoon session (13:30-15:00)
+  afternoon:
+    start_time: "13:30"
+    end_time: "15:00"
+    phase_code: 4
+    characteristics:
+      - "Volume returns"
+      - "Can resume morning trend or reverse"
+      - "Continuation or reversal clarity"
+    
+  # Phase 5: Close hour (15:00-16:00)
+  close:
+    start_time: "15:00"
+    end_time: "16:00"
+    phase_code: 5
+    characteristics:
+      - "Institutional positioning for overnight"
+      - "VWAP anchoring"
+      - "Momentum continuation or fade to VWAP"
+      - "Flatten by 15:55"
+    
+# ==========================================
+# VWAP SESSION RESET
+# ==========================================
+# VWAP is session-specific for MES
+# Reset at RTH open, not overnight
+vwap_config:
+  reset_time: "09:30"  # RTH open
+  session_type: "RTH"  # Only RTH bars included in VWAP
+  include_overnight: false
+  
+  # Optionally compute overnight VWAP separately for gap analysis
+  # but do NOT use for trading (we don't trade overnight)
+  overnight_vwap_for_analysis_only: true
+  
+# ==========================================
+# SPECIAL DAYS (Holidays, Half-Days)
+# ==========================================
+special_days:
+  # Use external calendar feed (calendar.yaml) or fallback behavior
+  fallback_behavior:
+    unknown_schedule_day: "OBSERVE_ONLY"  # If unsure, don't trade
+    missing_calendar_file: "OBSERVE_ONLY"  # Fail-closed
+    
+  # Known half-days (early close at 13:00)
+  half_days:
+    - "2025-07-03"  # Day before Independence Day
+    - "2025-11-28"  # Day after Thanksgiving
+    - "2025-12-24"  # Christmas Eve
+    # Add more as needed
+    
+  # Market closed
+  holidays:
+    - "2025-01-01"  # New Year's Day
+    - "2025-01-20"  # MLK Day
+    - "2025-02-17"  # Presidents Day
+    - "2025-04-18"  # Good Friday
+    - "2025-05-26"  # Memorial Day
+    - "2025-07-04"  # Independence Day
+    - "2025-09-01"  # Labor Day
+    - "2025-11-27"  # Thanksgiving
+    - "2025-12-25"  # Christmas
+    # Update annually
+    
+# ==========================================
+# SCALABILITY CONSIDERATIONS
+# ==========================================
+# As system scales:
+# - May trade multiple sessions (RTH + select ETH windows)
+# - May trade multiple instruments with different session schedules
+# - May need per-instrument session configs
+# - May need to handle international markets
+#
+# For v1: RTH only, MES only, keep it simple
+# But design must allow for session expansion as capital/capability grows
+
+# Fail-closed policy (constitutional expectation):
+# If session.yaml cannot be loaded or parsed, default to OBSERVE_ONLY.
