@@ -221,6 +221,12 @@ class BotRunner:
 
             order_res = self.adapter.place_order(intent, close)
             self.state_store.record_entry(dt)
+            # Update expected position based on intent
+            try:
+                delta = int(intent.contracts) * (1 if getattr(intent, "direction", "LONG") == "LONG" else -1)
+                self.state_store.update_expected_position(delta)
+            except Exception:
+                pass
             oe = Event.make(stream_id, dt.isoformat(), "ORDER_EVENT", order_res, self.config_hash)
             self.events.append(oe)
 
@@ -250,5 +256,44 @@ class BotRunner:
                 attr = attribute(trade_record, {"rules": [], "default": {"id": "A0_UNCLASSIFIED", "process_score": 0.5, "outcome_score": 0.5}})
                 attr_event = Event.make(stream_id, dt.isoformat(), "ATTRIBUTION", attr, self.config_hash)
                 self.events.append(attr_event)
+
+        # Reconciliation + TTL enforcement (lightweight per-cycle check)
+        try:
+            expected_pos = self.state_store.get_expected_position()
+            actual_snap = self.adapter.get_position_snapshot()
+            actual_pos = int(actual_snap.get("position", 0))
+            recon_payload = {"expected_position": expected_pos, "actual_position": actual_pos, "actions": []}
+
+            if expected_pos != actual_pos:
+                # Trigger kill per constitution (fail-safe)
+                self.adapter.set_kill_switch(True)
+                try:
+                    self.adapter.flatten_positions()
+                finally:
+                    self.state_store.set_expected_position(0)
+                recon_payload["kill_switch"] = True
+                recon_payload["kill_reason"] = "ORDER_STATE_DESYNC"
+
+            # TTL cancel loop (only orders not filled)
+            ttl_seconds = int(bar.get("order_ttl_seconds", 0) or 0) or 90
+            open_orders = self.adapter.get_open_orders()
+            for oid, od in open_orders.items():
+                st = od.get("status")
+                if st in ("NEW", "WORKING", "ACCEPTED"):
+                    try:
+                        created_at = datetime.fromisoformat(str(od.get("created_at")))
+                    except Exception:
+                        created_at = dt
+                    age = (dt - created_at).total_seconds()
+                    if age > ttl_seconds:
+                        if self.adapter.cancel_order(oid):
+                            recon_payload["actions"].append({"action": "CANCEL", "order_id": oid, "age_seconds": age})
+
+            re = Event.make(stream_id, dt.isoformat(), "SYSTEM_EVENT", {"reconciliation": recon_payload}, self.config_hash)
+            self.events.append(re)
+        except Exception:
+            # Do not fail the loop on recon errors; emit minimal event
+            re = Event.make(stream_id, dt.isoformat(), "SYSTEM_EVENT", {"reconciliation": {"error": True}}, self.config_hash)
+            self.events.append(re)
 
         return decision

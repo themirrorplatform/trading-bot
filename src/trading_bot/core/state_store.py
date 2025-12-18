@@ -28,6 +28,8 @@ class StateStore:
     def __init__(self):
         self._risk_state = RiskState()
         self._current_day: Optional[str] = None
+        # Execution expectations
+        self._expected_position: int = 0
 
     def get_risk_state(self, now: Optional[datetime] = None) -> Dict[str, Any]:
         ts = (now or datetime.now(ET))
@@ -68,3 +70,13 @@ class StateStore:
         self._risk_state.last_entry_time = None
         self._risk_state.consecutive_losses = 0
         # Keep daily_pnl and trades_today until day boundary
+
+    # --- Execution expectation helpers ---
+    def get_expected_position(self) -> int:
+        return int(self._expected_position)
+
+    def set_expected_position(self, position: int) -> None:
+        self._expected_position = int(position)
+
+    def update_expected_position(self, delta: int) -> None:
+        self._expected_position = int(self._expected_position) + int(delta)

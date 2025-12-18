@@ -17,6 +17,7 @@ from decimal import Decimal
 class OrderRecord:
     order_id: str
     ts: datetime
+    created_at: datetime
     direction: str
     contracts: int
     entry_price: Decimal
@@ -53,6 +54,7 @@ class TradovateAdapter:
         rec = OrderRecord(
             order_id=oid,
             ts=ts,
+            created_at=ts,
             direction=intent.direction,
             contracts=intent.contracts,
             entry_price=last_price,
@@ -80,11 +82,35 @@ class TradovateAdapter:
             if rec.status == "NEW":
                 rec.status = "CANCELED"
 
+    def cancel_order(self, order_id: str) -> bool:
+        rec = self._orders.get(order_id)
+        if not rec:
+            return False
+        if rec.status in ("NEW", "WORKING", "ACCEPTED"):
+            rec.status = "CANCELED"
+            return True
+        return False
+
     def get_position_snapshot(self) -> Dict[str, Any]:
         return {
             "position": self._position,
             "last_fill_price": float(self._last_fill_price) if self._last_fill_price is not None else None,
         }
+
+    def set_kill_switch(self, active: bool) -> None:
+        # SIM: no-op aside from internal flag
+        self._kill_switch = bool(active)
+
+    def get_open_orders(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for oid, r in self._orders.items():
+            out[oid] = {
+                "status": r.status,
+                "direction": r.direction,
+                "contracts": r.contracts,
+                "created_at": r.created_at.isoformat(),
+            }
+        return out
 
     def set_kill_switch(self, active: bool) -> None:
         self._kill_switch = bool(active)
