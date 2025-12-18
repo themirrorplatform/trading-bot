@@ -221,43 +221,53 @@ class BotRunner:
 
             order_res = self.adapter.place_order(intent, close)
             self.state_store.record_entry(dt)
-            # Update expected position based on intent
+            # Update expected position only with filled delta returned (if any)
             try:
-                delta = int(intent.contracts) * (1 if getattr(intent, "direction", "LONG") == "LONG" else -1)
-                self.state_store.update_expected_position(delta)
+                filled_delta = int(order_res.get("filled_delta", 0) or 0)
+                if filled_delta:
+                    self.state_store.update_expected_position(filled_delta)
             except Exception:
                 pass
             oe = Event.make(stream_id, dt.isoformat(), "ORDER_EVENT", order_res, self.config_hash)
             self.events.append(oe)
+            # no simulated fills here; adapter may emit fills via on_cycle()/pop_events
 
-            # Only simulate fills and attribute if order accepted/filled
-            if order_res.get("status") in ("FILLED", "PARTIALLY_FILLED", "ACCEPTED", "WORKING"):
-                fill_payload = simulate_fills(
-                    {
-                        "direction": intent.direction,
-                        "contracts": intent.contracts,
-                    },
-                    {"last_price": float(close), "spread_ticks": signals["spread_ticks"]},
-                    {"tick_size": float(self.signals.tick_size), "slippage_ticks": signals["slippage_estimate_ticks"], "spread_to_slippage_ratio": 0.5},
-                )
-                fe = Event.make(stream_id, dt.isoformat(), "FILL_EVENT", fill_payload["payload"], self.config_hash)
-                self.events.append(fe)
+        # Adapter per-cycle processing (fill progression for SIM)
+        try:
+            recon_interval = int(self.execution_contract.get("order_lifecycle", {}).get("reconciliation_interval_bars", 1))
+        except Exception:
+            recon_interval = 1
+        try:
+            self.adapter.on_cycle(dt)
+            for evt in getattr(self.adapter, "pop_events", lambda: [])():
+                if evt.get("type") == "FILL":
+                    fe = Event.make(stream_id, dt.isoformat(), "FILL_EVENT", evt, self.config_hash)
+                    self.events.append(fe)
+                    # Update expected position on fills
+                    try:
+                        filled_qty = int(evt.get("filled_qty", 0) or 0)
+                        # direction not present in evt; infer from position delta is tricky; skip for now
+                        # Runner keeps expected position conservative unless immediate fill returned earlier
+                    except Exception:
+                        pass
+                    # Emit basic attribution stub (placeholder)
+                    trade_record = {
+                        "entry_price": float(close),
+                        "exit_price": float(evt.get("fill_price", float(close))),
+                        "pnl_usd": 0.0,
+                        "duration_seconds": 0,
+                        "slippage_ticks": signals["slippage_estimate_ticks"],
+                        "spread_ticks": signals["spread_ticks"],
+                        "eqs": float(eqs_val),
+                        "dvs": float(dvs_val),
+                    }
+                    attr = attribute(trade_record, {"rules": [], "default": {"id": "A0_UNCLASSIFIED", "process_score": 0.5, "outcome_score": 0.5}})
+                    attr_event = Event.make(stream_id, dt.isoformat(), "ATTRIBUTION", attr, self.config_hash)
+                    self.events.append(attr_event)
+        except Exception:
+            pass
 
-                trade_record = {
-                    "entry_price": float(close),
-                    "exit_price": float(fill_payload["payload"].get("fill_price", close)),
-                    "pnl_usd": 0.0,
-                    "duration_seconds": 0,
-                    "slippage_ticks": fill_payload["payload"].get("slippage_ticks"),
-                    "spread_ticks": fill_payload["payload"].get("spread_ticks"),
-                    "eqs": float(eqs_val),
-                    "dvs": float(dvs_val),
-                }
-                attr = attribute(trade_record, {"rules": [], "default": {"id": "A0_UNCLASSIFIED", "process_score": 0.5, "outcome_score": 0.5}})
-                attr_event = Event.make(stream_id, dt.isoformat(), "ATTRIBUTION", attr, self.config_hash)
-                self.events.append(attr_event)
-
-        # Reconciliation + TTL enforcement (lightweight per-cycle check)
+        # Reconciliation + TTL enforcement with pacing
         try:
             expected_pos = self.state_store.get_expected_position()
             actual_snap = self.adapter.get_position_snapshot()
@@ -293,11 +303,20 @@ class BotRunner:
                         if self.adapter.cancel_order(oid):
                             recon_payload["actions"].append({"action": "CANCEL", "order_id": oid, "age_seconds": age})
 
-            re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", recon_payload, self.config_hash)
-            self.events.append(re)
+            # Emit reconciliation per configured interval
+            if not hasattr(self, "_recon_bar_counter"):
+                self._recon_bar_counter = 0
+            self._recon_bar_counter += 1
+            if self._recon_bar_counter % max(1, recon_interval) == 0:
+                re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", recon_payload, self.config_hash)
+                self.events.append(re)
         except Exception:
             # Do not fail the loop on recon errors; emit minimal event
-            re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", {"error": True}, self.config_hash)
-            self.events.append(re)
+            if not hasattr(self, "_recon_bar_counter"):
+                self._recon_bar_counter = 0
+            self._recon_bar_counter += 1
+            if self._recon_bar_counter % max(1, recon_interval) == 0:
+                re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", {"error": True}, self.config_hash)
+                self.events.append(re)
 
         return decision

@@ -46,6 +46,11 @@ def main():
     s_seed.add_argument("--start-iso", default="2025-12-18T09:31:00-05:00")
     s_seed.add_argument("--count", type=int, default=30)
 
+    # simple report dashboard
+    s_report = sub.add_parser("report")
+    s_report.add_argument("--db", default="data/events.sqlite")
+    s_report.add_argument("--stream", required=True)
+
     args = p.parse_args()
 
     if args.cmd == "init-db":
@@ -119,6 +124,40 @@ def main():
             cur += timedelta(minutes=1)
         added = store.append_many(events)
         print(f"Seeded {added} BAR_1M events into stream {args.stream} at {args.db}")
+        return
+
+    if args.cmd == "report":
+        store = EventStore(args.db)
+        events = store.read_stream(args.stream)
+        recon = 0
+        desync = 0
+        cancels = 0
+        skip_hist = {}
+        kill_hist = {}
+        for e in events:
+            if e.type == "RECONCILIATION":
+                recon += 1
+                if e.payload.get("kill_switch"):
+                    desync += 1
+                    reason = e.payload.get("kill_reason", "UNKNOWN")
+                    kill_hist[reason] = kill_hist.get(reason, 0) + 1
+                for a in e.payload.get("actions", []) or []:
+                    if a.get("action") == "CANCEL":
+                        cancels += 1
+            if e.type == "DECISION_RECORD":
+                rc = (e.payload.get("reasons") or {}).get("reason_code")
+                if rc:
+                    skip_hist[rc] = skip_hist.get(rc, 0) + 1
+        print("Reconciliation summary:")
+        print(f"  events: {recon}")
+        print(f"  desync_kills: {desync}")
+        print(f"  ttl_cancels: {cancels}")
+        print("Skip reasons (top 10):")
+        for k, v in sorted(skip_hist.items(), key=lambda kv: kv[1], reverse=True)[:10]:
+            print(f"  {k}: {v}")
+        print("Kill causes:")
+        for k, v in sorted(kill_hist.items(), key=lambda kv: kv[1], reverse=True):
+            print(f"  {k}: {v}")
         return
 
 
