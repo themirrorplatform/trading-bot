@@ -5,7 +5,7 @@ interface AuthProps {
   onAuthSuccess: () => void;
 }
 
-export function Auth({ onAuthSuccess }: AuthProps) {
+export function Auth(_props: AuthProps) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
