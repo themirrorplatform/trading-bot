@@ -1,41 +1,102 @@
-# Supabase Cloud Mirror (Phase 2)
+# Supabase Configuration for Trading Bot
 
-This folder contains the cloud schema and migration files to mirror sanitized trading bot events, snapshots, and health to Supabase for anywhere-access dashboards.
+This directory contains the database schema and migrations for the trading bot's cloud mirror in Supabase.
 
-## What's included
-- `migrations/20251218_phase2.sql` – tables: `bot_devices`, `bot_events`, `bot_latest_snapshot`, `bot_health`
-- `schema.sql` – same DDL as a single-file reference
+## Quick Start
 
-## Apply the migration (choose 1)
+1. **Create Supabase Project**
+   - Go to https://supabase.com
+   - Create new project in desired region
+   - Note your project URL and database password
 
-### Option A — Supabase SQL Editor (quickest)
-1. Open your project at https://app.supabase.com → Database → SQL Editor.
-2. Paste the contents of `supabase/migrations/20251218_phase2.sql`.
-3. Run → verify tables exist under Database → Tables.
+2. **Deploy Schema**
+   - Open Supabase dashboard  SQL Editor
+   - Copy each migration file content in order:
+     1. migrations/20251218_phase2.sql - Core schema (tables + indexes)
+     2. migrations/20251218_rls_policies.sql - Row-level security for Anon/Service roles
+     3. migrations/20251219_realtime_subscriptions.sql - Enable Realtime on tables
+     4. migrations/20251219_publisher_functions.sql - Functions for publisher writes
+     5. migrations/20251219_audit_and_retention.sql - Audit log + cleanup functions
 
-### Option B — psql (if you have the DB URL)
-1. Set environment variable `SUPABASE_DB_URL` to the project's Postgres URL:
-   - Format: `postgresql://postgres:<PASSWORD>@db.<ref>.supabase.co:5432/postgres`
-2. Run:
-   ```powershell
-   $env:PGOPTIONS='-c client_min_messages=warning'
-   psql $env:SUPABASE_DB_URL -f .\supabase\migrations\20251218_phase2.sql
-   ```
+3. **Get Credentials**
+   - API URL: Project Settings  API
+   - Anon Key: Project Settings  API  Anon public
+   - Service Role Key: Project Settings  API  Service role secret (keep this safe!)
 
-### Option C — Supabase CLI (remote db push)
-1. Install CLI: https://supabase.com/docs/guides/cli
-2. Login with a personal access token: `supabase login`
-3. Link: `supabase link --project-ref <your-ref>`
-4. Push: `supabase db push` (ensure migration exists in `supabase/migrations/`)
+4. **Configure Environment**
+   `ash
+   # In ui/.env
+   VITE_SUPABASE_URL=https://your-project.supabase.co
+   VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
+   `
 
-Note: The CLI uses your Supabase account token (not anon/service keys).
+## Files
 
-## Next steps
-- Enable Realtime for `bot_events`, `bot_latest_snapshot`, `bot_health` in the Supabase UI.
-- Create an Edge Function `mirror-events` to receive batches from the publisher and upsert into these tables.
-- Configure the publisher (`publisher/config.json`) with your function URL and shared secret.
+- **schema.sql** - Base schema (informational, see migrations/ for actual deployment)
+- **migrations/** - All migrations in deployment order (5 files total)
+- **migrations/README.md** - Detailed documentation for each migration
 
-## Security
-- Do NOT commit secrets.
-- The publisher should use a shared secret validated by your Edge Function, not the anon key.
-- UI in cloud mode should use the anon key with RLS rules that permit read-only access to your data.
+## Architecture
+
+\\\
+Trading Bot (Local)
+    
+Publisher (FastAPI Edge Function)
+     (uses service_role key, writes only)
+Supabase PostgreSQL
+     (uses anon key + RLS, reads only)
+Netlify UI (Browser)
+    
+User Dashboard (Realtime updates)
+\\\
+
+## Security Model
+
+- **Anon users (UI)**: Read-only via RLS, Realtime subscriptions only
+- **Service role (publisher)**: Writes only through stored functions
+- **No direct table writes**: All data changes through PL/pgSQL functions
+- **Audit trail**: All writes logged to bot_audit_log table
+
+## Deployment Methods
+
+See \migrations/README.md\ for detailed instructions:
+- **Dashboard SQL Editor** (easiest, recommended for first-time)
+- **Supabase CLI** (recommended for CI/CD automation)
+- **Direct psql** (if CLI available)
+
+## Migration Summary
+
+| File | Purpose | Creates |
+|------|---------|---------|
+| 20251218_phase2.sql | Core schema | 4 tables, 3 indexes |
+| 20251218_rls_policies.sql | Security | Anon read-only, service role write |
+| 20251219_realtime_subscriptions.sql | Live updates | Realtime publication |
+| 20251219_publisher_functions.sql | API | 4 PL/pgSQL functions for writes |
+| 20251219_audit_and_retention.sql | Auditing | Audit log + cleanup functions |
+
+## Quick Verification
+
+After deploying, verify in Supabase SQL Editor:
+
+\\\sql
+-- Should return 4
+SELECT COUNT(*) FROM pg_tables 
+WHERE schemaname = 'public' AND tablename LIKE 'bot_%';
+
+-- Should show 'on'
+SELECT tablename, rowsecurity FROM pg_tables 
+WHERE tablename LIKE 'bot_%';
+
+-- Should return 3 tables
+SELECT * FROM pg_publication_tables 
+WHERE pubname = 'supabase_realtime';
+\\\
+
+## Support & Troubleshooting
+
+1. **RLS blocking access?**  Check dashboard Logs for auth errors
+2. **Realtime not working?**  Verify tables in \pg_publication_tables\
+3. **Functions not executing?**  Check \pg_proc\ for function definitions
+4. **Audit log missing?**  Verify triggers with \information_schema.triggers\
+
+See migrations/README.md for complete troubleshooting guide.
