@@ -105,15 +105,58 @@ Drop this folder into VS Code and start building **one component at a time**.
 ## Run tests
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-pytest -q
+# Trading Bot V2
+
+Production-focused Python trading bot with V2 engines (28 signals, sigmoid beliefs, EUC scoring, capital tiers) and SIM + LIVE adapters.
+
+## Prerequisites
+- Windows + Python 3.13 (virtualenv recommended)
+- SQLite for event store (bundled)
+- tzdata (installed) for ZoneInfo("America/New_York")
+- Optional for LIVE: websockets (installed via requirements)
+
+## Setup
+```powershell
+# Create venv
+python -m venv src/trading_bot/.venv
+
+# Activate venv
+& src/trading_bot/.venv/Scripts/Activate.ps1
+
+# Install packages
+pip install -r requirements.txt
 ```
 
-## Where to start coding next
+## Quick Start (SIM)
+```powershell
+# Ensure package imports work
+$env:PYTHONPATH="C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/src"
 
-- `src/engines/signals.py` (Component 2)
-- `src/engines/belief.py`  (Component 3)
+# Run a single bar through the pipeline (SIM adapter)
+python -m trading_bot.cli run-once --bar-json C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/src/trading_bot/state/tmp_bar.json --db C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/data/events.sqlite --adapter tradovate --fill-mode IMMEDIATE
+```
 
-Contracts live in `contracts/`.
+## Quick Start (LIVE)
+```powershell
+# Optional: install websockets if not already installed
+pip install websockets
+
+# Run a single bar with LIVE adapter (polling fallback if WS unavailable)
+python -m trading_bot.cli run-once --bar-json C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/src/trading_bot/state/tmp_bar.json --db C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/data/events.sqlite --adapter tradovate --fill-mode IMMEDIATE --live --instrument MES --account-id <YOUR_ACCOUNT_ID> --access-token <YOUR_TOKEN> --ws-url wss://<your-ws-endpoint>
+```
+
+## Notes
+- SIM supports fill_mode: IMMEDIATE, DELAYED, PARTIAL, TIMEOUT.
+- LIVE adapter is fail-soft: uses HTTP polling if websocket not available.
+- Runner handles reconciliation and TTL; adapter enforces kill-switch on heartbeat staleness.
+
+## Testing
+```powershell
+# Run the V2 integration test
+$env:PYTHONPATH="C:/Users/ilyad/OneDrive/Desktop/trading-bot-v1/trading-bot-v1/src"
+python -m pytest tests/test_runner_v2_integration.py -q
+```
+
+## Troubleshooting
+- If ModuleNotFoundError: trading_bot, set PYTHONPATH to the src folder as shown above.
+- If ZoneInfoNotFoundError('America/New_York'), ensure tzdata is installed in the venv.

@@ -5,10 +5,13 @@ from pathlib import Path
 from decimal import Decimal
 from datetime import datetime
 
-from trading_bot.engines.signals import SignalEngine, ET
-from trading_bot.engines.decision import DecisionEngine
+from dataclasses import asdict
+from enum import Enum
+
+from trading_bot.engines.signals_v2 import SignalEngineV2 as SignalEngine, ET
+from trading_bot.engines.decision_v2 import DecisionEngineV2 as DecisionEngine
+from trading_bot.engines.belief_v2 import BeliefEngineV2
 from trading_bot.engines.dvs_eqs import compute_dvs, compute_eqs
-from trading_bot.engines.belief import update_beliefs
 from trading_bot.engines.attribution import attribute
 from trading_bot.engines.simulator import simulate_fills
 from trading_bot.core.adapter_factory import create_adapter
@@ -24,6 +27,7 @@ class BotRunner:
 
     def __init__(self, contracts_path: str = "src/trading_bot/contracts", db_path: str = "data/events.sqlite", adapter: str = "tradovate", fill_mode: str = "IMMEDIATE", adapter_kwargs: Dict[str, Any] | None = None):
         self.signals = SignalEngine()
+        self.beliefs = BeliefEngineV2()
         self.decision = DecisionEngine(contracts_path=contracts_path)
         akwargs = adapter_kwargs or {}
         if adapter.lower() in ("tradovate", "tv", "sim"):
@@ -52,10 +56,24 @@ class BotRunner:
         self.data_contract = data_contract
         self.execution_contract = execution_contract
 
+        # Normalize decision engine config for hashing (avoid missing attrs on V2)
+        tier_cfg = {}
+        try:
+            for k, v in getattr(self.decision, "tier_constraints", {}).items():
+                asd = asdict(v)
+                for kk, vv in list(asd.items()):
+                    if isinstance(vv, Decimal):
+                        asd[kk] = str(vv)
+                    elif isinstance(vv, Enum):
+                        asd[kk] = vv.name
+                tier_cfg[getattr(k, "name", str(k))] = asd
+        except Exception:
+            tier_cfg = {}
+
         cfg_sources = {
-            "constitution": self.decision.constitution,
-            "session": self.decision.session,
-            "strategy_templates": self.decision.strategy_templates,
+            "templates": getattr(self.decision, "templates", {}),
+            "tier_constraints": tier_cfg,
+            "euc_params": getattr(self.decision, "euc_params", {}),
             "risk_model": risk_model,
             "data_contract": data_contract,
             "execution_contract": execution_contract,
@@ -65,37 +83,18 @@ class BotRunner:
         self._belief_state: Dict[str, Any] = {}
 
     def run_once(self, bar: Dict[str, Any], stream_id: str = "MES_RTH") -> Dict[str, Any]:
-        """Process a single bar: compute signals, decide, and optionally execute."""
+        """Process a single bar with V2 engines: signals → beliefs → decision → execution."""
         ts = bar.get("ts")
         # Assume ts is ISO string; convert to datetime ET
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=ET)
 
+        open_price = Decimal(str(bar.get("o", bar["c"])))
         high = Decimal(str(bar["h"]))
         low = Decimal(str(bar["l"]))
         close = Decimal(str(bar["c"]))
         volume = int(bar.get("v", 0))
-
-        vwap = self.signals.update_vwap(dt, high, low, close, volume)
-        atrs = self.signals.update_atrs(high, low, close)
-        phase = self.signals.get_session_phase(dt)
-
-        vwap_distance_pct = None
-        if vwap is not None and vwap != 0:
-            vwap_distance_pct = float(((close - vwap) / vwap) * Decimal("100"))
-
-        signals = {
-            "session_phase_code": phase.phase_code,
-            "vwap": vwap,
-            "atr14": atrs["atr14"],
-            "atr30": atrs["atr30"],
-            "tr": atrs["tr"],
-            "vwap_distance_pct": vwap_distance_pct,
-            # In SIM mode, assume a 1-tick spread if no L1
-            "spread_ticks": 1,
-            "slippage_estimate_ticks": 1,
-        }
 
         # DVS/EQS computation using contracts and current metrics
         dvs_state = {
@@ -127,61 +126,92 @@ class BotRunner:
             "equity_usd": Decimal("1000.00"),
         }
 
-        # Belief update
-        belief_cfg = self._belief_state.get("cfg") or {
-            "constraints": [
-                {"id": "F1", "weights": {"vwap_distance_pct": 1.0}, "decay_lambda": 0.1},
-            ],
-            "signal_norms": {"vwap_distance_pct": {"min": -2.0, "max": 2.0}},
-            "stability": {"alpha": 0.2},
-        }
-        beliefs = update_beliefs(signals, self._belief_state.get("beliefs_state", {}), belief_cfg)
-        self._belief_state["beliefs_state"] = beliefs
+        # --- V2 signals ---
+        # Approximate L1 if absent: 1-tick spread around close
+        half_tick = self.signals.tick_size / Decimal("2")
+        bid = Decimal(str(bar.get("bid", close - half_tick)))
+        ask = Decimal(str(bar.get("ask", close + half_tick)))
 
-        decision = self.decision.decide(signals, state, risk_state)
+        signal_out = self.signals.compute_signals(
+            timestamp=dt,
+            open_price=open_price,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+            bid=bid,
+            ask=ask,
+            dvs=float(dvs_val),
+            eqs=float(eqs_val),
+        )
+
+        # Make signals JSON-safe
+        signal_dict = asdict(signal_out)
+        signal_dict["timestamp"] = dt.isoformat()
+        # Reliability is a nested dataclass; leave as dict from asdict
+
+        # --- Beliefs ---
+        beliefs = self.beliefs.compute_beliefs(
+            signals=signal_dict,
+            session_phase=signal_dict.get("session_phase", 0),
+            dvs=float(dvs_val),
+            eqs=float(eqs_val),
+        )
+        belief_payload = {cid: asdict(b) for cid, b in beliefs.items()}
+
+        # --- Decision ---
+        decision_result = self.decision.decide(
+            equity=state["equity_usd"],
+            beliefs=beliefs,
+            signals=signal_dict,
+            state=state,
+            risk_state=risk_state,
+        )
 
         # Log beliefs and decision
-        b_event = Event.make(stream_id, dt.isoformat(), "BELIEFS_1M", beliefs, self.config_hash)
+        b_event = Event.make(stream_id, dt.isoformat(), "BELIEFS_1M", belief_payload, self.config_hash)
         self.events.append(b_event)
-        e = Event.make(stream_id, dt.isoformat(), "DECISION_1M", decision, self.config_hash)
+        decision_payload = {
+            "action": decision_result.action,
+            "reason": decision_result.reason.name if hasattr(decision_result.reason, "name") else decision_result.reason,
+            "order_intent": decision_result.order_intent,
+            "metadata": decision_result.metadata,
+            "timestamp": decision_result.timestamp.isoformat(),
+        }
+        e = Event.make(stream_id, dt.isoformat(), "DECISION_1M", decision_payload, self.config_hash)
         self.events.append(e)
 
         # Decision Journal: emit exactly once per cycle
         journal = DecisionJournal(self.events, stream_id=stream_id, config_hash=self.config_hash)
-        setup_scores = {}
-        try:
-            if isinstance(beliefs, dict) and isinstance(beliefs.get("beliefs"), dict):
-                setup_scores = {k: float(v) for k, v in beliefs["beliefs"].items()}
-        except Exception:
-            setup_scores = {}
+        # Use effective likelihoods as setup scores
+        setup_scores = {cid: float(b.effective_likelihood) for cid, b in beliefs.items()}
 
         context = {
             "dvs": float(state.get("dvs", 0) or 0),
             "eqs": float(state.get("eqs", 0) or 0),
-            "session_phase": signals.get("session_phase_code"),
-            "spread_ticks": signals.get("spread_ticks"),
+            "session_phase": signal_dict.get("session_phase"),
+            "spread_ticks": signal_dict.get("spread_proxy_tickiness"),
         }
 
-        if decision.get("action") == "ORDER_INTENT":
-            # Trade intent summary
-            metadata = decision.get("metadata", {}) or {}
-            setup_id = metadata.get("strategy_id", "UNKNOWN")
-            pe = DecisionJournal.summarize_trade("ENTER", setup_id, None, context)
+        if decision_result.action == "ORDER_INTENT":
+            metadata = decision_result.metadata or {}
+            setup_id = metadata.get("template_id", "UNKNOWN")
+            pe = DecisionJournal.summarize_trade("ENTER", setup_id, metadata.get("euc_score"), context)
             record = DecisionRecord(
                 time=dt.isoformat(),
                 instrument=stream_id,
                 action="ENTER",
                 setup_scores=setup_scores,
-                euc_score=None,
+                euc_score=metadata.get("euc_score"),
                 reasons={"reason_code": "ENTER", "details": metadata},
                 plain_english=pe,
                 context=context,
             )
             journal.log(record)
         else:
-            # No-trade summary
-            reason = decision.get("reason")
-            reasons = {"reason_code": str(reason), "details": decision.get("metadata", {})}
+            reason = decision_result.reason
+            reason_code = reason.name if hasattr(reason, "name") else str(reason)
+            reasons = {"reason_code": reason_code, "details": decision_result.metadata or {}}
             pe = DecisionJournal.summarize_no_trade(setup_scores, reasons, context)
             record = DecisionRecord(
                 time=dt.isoformat(),
@@ -195,36 +225,39 @@ class BotRunner:
             )
             journal.log(record)
 
-        # If order intent, simulate placement and record entry
-        if decision["action"] == "ORDER_INTENT":
-            intent = decision["intent"]
-            # Enforce limit-only + bracket in SIM to match constitution
-            try:
-                intent.entry_type = "LIMIT"
-            except Exception:
-                pass
-            # Compute bracket prices from stop/target ticks
-            try:
-                tick_size = float(self.signals.tick_size)
-            except Exception:
-                tick_size = 0.25
-            side = 1 if getattr(intent, "direction", "LONG") == "LONG" else -1
-            entry_price = close
-            stop_price = float(entry_price) - side * float(intent.stop_ticks) * tick_size
-            target_price = float(entry_price) + side * float(intent.target_ticks) * tick_size
-            # Inject bracket + limit price into metadata
-            meta = getattr(intent, "metadata", {}) or {}
-            meta["limit_price"] = float(entry_price)
-            meta["bracket"] = {
-                "stop_price": round(stop_price, 2),
-                "target_price": round(target_price, 2),
-                "target_qty": max(1, int(getattr(intent, "contracts", 1) or 1) - 0),
-            }
-            intent.metadata = meta
+        # If order intent, place and record entry
+        if decision_result.action == "ORDER_INTENT":
+            intent = decision_result.order_intent or {}
+            # Enforce limit-only + bracket
+            intent["entry_type"] = "LIMIT"
+            tick_size = float(self.signals.tick_size)
+            side = 1 if intent.get("direction", "LONG") == "LONG" else -1
+            entry_price = float(close)
+            stop_ticks = int(intent.get("stop_ticks", 0) or 0)
+            target_ticks = int(intent.get("target_ticks", 0) or 0)
+            stop_price = entry_price - side * stop_ticks * tick_size
+            target_price = entry_price + side * target_ticks * tick_size
+            meta = intent.get("metadata", {}) or {}
+            meta.update(
+                {
+                    "limit_price": entry_price,
+                    "bracket": {
+                        "stop_price": round(stop_price, 2),
+                        "target_price": round(target_price, 2),
+                        "target_qty": max(1, int(intent.get("contracts", 1) or 1)),
+                    },
+                }
+            )
+            intent["metadata"] = meta
 
-            order_res = self.adapter.place_order(intent, close)
+            class _IntentObj:
+                def __init__(self, d: Dict[str, Any]):
+                    for k, v in d.items():
+                        setattr(self, k, v)
+
+            intent_obj = _IntentObj(intent)
+            order_res = self.adapter.place_order(intent_obj, close)
             self.state_store.record_entry(dt)
-            # Update expected position only with filled delta returned (if any)
             try:
                 filled_delta = int(order_res.get("filled_delta", 0) or 0)
                 if filled_delta:
@@ -259,8 +292,8 @@ class BotRunner:
                         "exit_price": float(evt.get("fill_price", float(close))),
                         "pnl_usd": 0.0,
                         "duration_seconds": 0,
-                        "slippage_ticks": signals["slippage_estimate_ticks"],
-                        "spread_ticks": signals["spread_ticks"],
+                        "slippage_ticks": signal_dict.get("slippage_risk_proxy"),
+                        "spread_ticks": signal_dict.get("spread_proxy_tickiness"),
                         "eqs": float(eqs_val),
                         "dvs": float(dvs_val),
                     }
@@ -322,4 +355,4 @@ class BotRunner:
                 re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", {"error": True}, self.config_hash)
                 self.events.append(re)
 
-        return decision
+        return decision_payload

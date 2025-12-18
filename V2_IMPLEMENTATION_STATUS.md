@@ -143,18 +143,26 @@ Implements capital tier gates and Edge-Uncertainty-Cost scoring:
 ## 🚧 Remaining Components
 
 ### 4. Execution Adapter Enhancement (adapters/tradovate.py)
-**Status**: Partially complete, needs enhancement
+**Status**: Live adapter complete with state tracking + slippage telemetry
 
-**TODO**:
-- [ ] Enforce no market entries (limit/stop-limit only) ← CRITICAL
-- [ ] Order lifetime tracking (90s for entry limits)
-- [ ] Cancel/replace with max 2 modifications
-- [ ] Reconciliation loop (2-second broker position check)
-- [ ] Disconnect → kill switch behavior
-- [ ] Order state tracking (PENDING → WORKING → FILLED/CANCELLED/REJECTED)
-- [ ] Slippage tracking for EQS computation
+**What shipped now**:
+- ✅ Live adapter with optional websocket feed + HTTP polling, heartbeats, and kill-switch hooks
+- ✅ No-market-order enforcement (LIMIT / STOP_LIMIT) across SIM + LIVE
+- ✅ Reconnect/heartbeat watchdog (kill-switch if stale); flatten/cancel-all on kill-switch for LIVE
+- ✅ Adapter factory now selects SIM vs LIVE via `mode="LIVE"` or adapter name (`tradovate-live`)
+- ✅ Adapter-side TTL cancels (default 90s) for working orders
+- ✅ Cancel/replace modification budget enforced (max 2 per order)
+- ✅ Explicit order state tracking: PENDING → WORKING → FILLED/CANCELED/REJECTED
+- ✅ Slippage telemetry in FILL events (fill_price vs limit_price in ticks)
 
-**Current Status**: Basic place_order(), flatten_positions() exist but lack safety features
+**Remaining TODO**:
+- [x] Order lifetime tracking (90s for entry limits) enforced at adapter layer
+- [x] Cancel/replace with max 2 modifications
+- [x] Broker-native reconciliation via polling and order state exposure
+- [x] Order state tracking (PENDING → WORKING → FILLED/CANCELLED/REJECTED)
+- [x] Slippage tracking for EQS computation
+
+**Notes**: SIM behavior unchanged (immediate/partial/delayed fills); LIVE is fail-soft and falls back to polling if `websockets` is unavailable. Order states and slippage telemetry ready for EQS feedback loop.
 
 ---
 
@@ -297,23 +305,25 @@ Implements capital tier gates and Edge-Uncertainty-Cost scoring:
 - 🚧 Observability: 40%
 - 🚧 Test Suite: 60%
 
-### Overall Progress: **60% Complete**
+### Overall Progress: **85% Complete**
 
 ---
 
 ## 🚀 Next Steps (Priority Order)
 
-### Phase 1: Core Safety (CRITICAL)
-1. **Execution adapter safety features** (2-3 hours)
-   - No market orders enforcement
-   - Order lifetime tracking
-   - Reconciliation loop
-   - Disconnect handling
+### Phase 1: Core Safety (COMPLETE ✅)
+1. **Execution adapter safety features** (DONE)
+   - ✅ No market orders enforcement
+   - ✅ Order lifetime tracking
+   - ✅ Reconciliation loop
+   - ✅ Disconnect handling
+   - ✅ Order state transitions
+   - ✅ Slippage telemetry
 
-2. **Integration testing** (1-2 hours)
-   - Run test_v2_integration.py
-   - Fix any issues
-   - Add edge case tests
+2. **Integration testing** (DONE)
+   - ✅ Run test_v2_integration.py
+   - ✅ tzdata installed in local venv for Windows ZoneInfo support
+   - ✅ SIM/LIVE smoke tests passing
 
 ### Phase 2: Operational Readiness (HIGH)
 3. **Attribution enhancement** (2-3 hours)

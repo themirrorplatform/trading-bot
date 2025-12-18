@@ -1,0 +1,7 @@
+{
+  "device_id": "bot-01",
+  "mirror_url": "https://<project>.functions.supabase.co/mirror-events",
+  "secret": "REPLACE_WITH_DEVICE_SECRET",
+  "batch_size": 200,
+  "poll_ms": 1000
+}

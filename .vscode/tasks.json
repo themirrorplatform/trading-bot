@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "API: dev (uvicorn)",
+			"type": "shell",
+			"command": "$env:PYTHONPATH=\"${workspaceFolder}/src\"; \"${workspaceFolder}/src/trading_bot/.venv/Scripts/python.exe\" \"${workspaceFolder}/api/main.py\"",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

@@ -1,0 +1,19 @@
+[build]
+# Build the UI app from the ui/ subdirectory
+base = "ui"
+command = "npm run build"
+publish = "dist"
+
+[build.environment]
+# Cloud mode uses Supabase (set these in Netlify UI)
+VITE_APP_MODE = "cloud"
+# VITE_SUPABASE_URL = "https://YOUR.supabase.co"
+# VITE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY"
+# Optional default device
+# VITE_DEFAULT_DEVICE_ID = "bot-01"
+
+# SPA fallback
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200

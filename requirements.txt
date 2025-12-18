@@ -1,0 +1,8 @@
+# Core runtime
+# Pin only when necessary; currently using Python 3.13
+
+# Timezone database for ZoneInfo on Windows
+tzdata>=2024.1
+
+# Optional: WebSocket client for live Tradovate adapter
+websockets>=12.0
