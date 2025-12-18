@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { BotEvent, BotSnapshot, BotHealth } from '../lib/types';
 import { supabase } from '../lib/supabase';
 
+const DEFAULT_DEVICE_ID = 'bot-01';
+
 interface BotStore {
   // State
   deviceId: string;
@@ -27,7 +29,7 @@ interface BotStore {
 
 export const useBotStore = create<BotStore>((set, get) => ({
   // Initial state
-  deviceId: import.meta.env.VITE_DEFAULT_DEVICE_ID || 'bot-01',
+  deviceId: import.meta.env.VITE_DEFAULT_DEVICE_ID || DEFAULT_DEVICE_ID,
   events: [],
   snapshot: null,
   health: null,

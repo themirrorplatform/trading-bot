@@ -58,7 +58,7 @@ export function Timeline() {
                 maxHeight: '100px',
                 overflowY: 'auto',
               }}>
-                {JSON.stringify(event.payload, null, 2)}
+                {sanitizePayload(event.payload)}
               </div>
             </div>
           ))}
@@ -66,6 +66,16 @@ export function Timeline() {
       )}
     </div>
   );
+}
+
+function sanitizePayload(payload: Record<string, unknown>): string {
+  try {
+    // Create a safe copy without potential script tags or dangerous content
+    const safeCopy = JSON.parse(JSON.stringify(payload));
+    return JSON.stringify(safeCopy, null, 2);
+  } catch {
+    return 'Invalid payload data';
+  }
 }
 
 function getEventTypeColor(eventType: string): string {

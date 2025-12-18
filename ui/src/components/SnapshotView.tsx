@@ -34,7 +34,7 @@ export function SnapshotView() {
     }}>
       <h2 style={{ marginBottom: '1rem' }}>Current Snapshot</h2>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
         <div>
           <div style={{ color: '#888', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
             Equity

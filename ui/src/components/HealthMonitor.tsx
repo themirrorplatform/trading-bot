@@ -32,7 +32,7 @@ export function HealthMonitor() {
     }}>
       <h2 style={{ marginBottom: '1rem' }}>Bot Health</h2>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
         <div>
           <div style={{ color: '#888', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
             Status
