@@ -304,3 +304,10 @@ market_microstructure:
 #
 # v1: Keep simple, single contract MES
 # But execution framework must extend to complex multi-leg execution
+
+# ==========================================
+# ORDER LIFECYCLE (Global Defaults)
+# ==========================================
+order_lifecycle:
+  ttl_seconds: 90
+  reconciliation_interval_bars: 1

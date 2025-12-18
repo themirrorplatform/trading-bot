@@ -112,12 +112,3 @@ class TradovateAdapter:
             }
         return out
 
-    def set_kill_switch(self, active: bool) -> None:
-        self._kill_switch = bool(active)
-
-    def get_open_orders(self) -> Dict[str, Any]:
-        return {oid: {
-            "direction": r.direction,
-            "contracts": r.contracts,
-            "status": r.status,
-        } for oid, r in self._orders.items()}

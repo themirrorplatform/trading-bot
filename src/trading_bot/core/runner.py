@@ -274,8 +274,12 @@ class BotRunner:
                 recon_payload["kill_switch"] = True
                 recon_payload["kill_reason"] = "ORDER_STATE_DESYNC"
 
-            # TTL cancel loop (only orders not filled)
-            ttl_seconds = int(bar.get("order_ttl_seconds", 0) or 0) or 90
+            # TTL cancel loop (only orders not filled) — configured via execution_contract
+            ttl_seconds = 90
+            try:
+                ttl_seconds = int(self.execution_contract.get("order_lifecycle", {}).get("ttl_seconds", ttl_seconds))
+            except Exception:
+                ttl_seconds = 90
             open_orders = self.adapter.get_open_orders()
             for oid, od in open_orders.items():
                 st = od.get("status")
@@ -289,11 +293,11 @@ class BotRunner:
                         if self.adapter.cancel_order(oid):
                             recon_payload["actions"].append({"action": "CANCEL", "order_id": oid, "age_seconds": age})
 
-            re = Event.make(stream_id, dt.isoformat(), "SYSTEM_EVENT", {"reconciliation": recon_payload}, self.config_hash)
+            re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", recon_payload, self.config_hash)
             self.events.append(re)
         except Exception:
             # Do not fail the loop on recon errors; emit minimal event
-            re = Event.make(stream_id, dt.isoformat(), "SYSTEM_EVENT", {"reconciliation": {"error": True}}, self.config_hash)
+            re = Event.make(stream_id, dt.isoformat(), "RECONCILIATION", {"error": True}, self.config_hash)
             self.events.append(re)
 
         return decision
