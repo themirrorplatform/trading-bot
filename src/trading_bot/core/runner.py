@@ -11,7 +11,7 @@ from trading_bot.engines.dvs_eqs import compute_dvs, compute_eqs
 from trading_bot.engines.belief import update_beliefs
 from trading_bot.engines.attribution import attribute
 from trading_bot.engines.simulator import simulate_fills
-from trading_bot.adapters.tradovate import TradovateAdapter
+from trading_bot.core.adapter_factory import create_adapter
 from trading_bot.core.state_store import StateStore
 from trading_bot.core.types import Event, stable_json, sha256_hex
 from trading_bot.core.config import load_yaml_contract
@@ -22,10 +22,13 @@ from trading_bot.log.decision_journal import DecisionJournal, DecisionRecord
 class BotRunner:
     """Glue the signal engine, decision engine, adapter, and event store (v1)."""
 
-    def __init__(self, contracts_path: str = "src/trading_bot/contracts", db_path: str = "data/events.sqlite"):
+    def __init__(self, contracts_path: str = "src/trading_bot/contracts", db_path: str = "data/events.sqlite", adapter: str = "tradovate", fill_mode: str = "IMMEDIATE", adapter_kwargs: Dict[str, Any] | None = None):
         self.signals = SignalEngine()
         self.decision = DecisionEngine(contracts_path=contracts_path)
-        self.adapter = TradovateAdapter(mode="SIMULATED")
+        akwargs = adapter_kwargs or {}
+        if adapter.lower() in ("tradovate", "tv", "sim"):
+            akwargs = {**akwargs, "fill_mode": fill_mode}
+        self.adapter = create_adapter(adapter, **akwargs)
         self.state_store = StateStore()
         self.events = EventStore(db_path)
         # Ensure event store schema exists

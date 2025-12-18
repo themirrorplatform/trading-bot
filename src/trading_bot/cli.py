@@ -25,12 +25,16 @@ def main():
     s_run = sub.add_parser("run-once")
     s_run.add_argument("--bar-json", required=True, help="Path to JSON file with bar payload {ts,o,h,l,c,v}")
     s_run.add_argument("--db", default="data/events.sqlite")
+    s_run.add_argument("--adapter", default="tradovate", choices=["tradovate", "ninjatrader"], help="Execution adapter")
+    s_run.add_argument("--fill-mode", default="IMMEDIATE", choices=["IMMEDIATE", "DELAYED", "PARTIAL", "TIMEOUT"], help="SIM fill mode (Tradovate)")
 
     # replay from DB stream of BAR_1M
     s_replay_stream = sub.add_parser("replay-stream")
     s_replay_stream.add_argument("--db", default="data/events.sqlite")
     s_replay_stream.add_argument("--stream", required=True)
     s_replay_stream.add_argument("--contracts", default="src/trading_bot/contracts")
+    s_replay_stream.add_argument("--adapter", default="tradovate", choices=["tradovate", "ninjatrader"])
+    s_replay_stream.add_argument("--fill-mode", default="IMMEDIATE", choices=["IMMEDIATE", "DELAYED", "PARTIAL", "TIMEOUT"])
 
     # replay from JSON array of bars
     s_replay_json = sub.add_parser("replay-json")
@@ -38,6 +42,8 @@ def main():
     s_replay_json.add_argument("--db", default="data/events.sqlite")
     s_replay_json.add_argument("--stream", default="MES_RTH")
     s_replay_json.add_argument("--contracts", default="src/trading_bot/contracts")
+    s_replay_json.add_argument("--adapter", default="tradovate", choices=["tradovate", "ninjatrader"])
+    s_replay_json.add_argument("--fill-mode", default="IMMEDIATE", choices=["IMMEDIATE", "DELAYED", "PARTIAL", "TIMEOUT"])
 
     # seed demo BAR_1M events into DB
     s_seed = sub.add_parser("seed-demo-bars")
@@ -62,16 +68,18 @@ def main():
     if args.cmd == "run-once":
         with open(args.bar_json, "r", encoding="utf-8") as f:
             bar = json.load(f)
-        runner = BotRunner(db_path=args.db)
+        runner = BotRunner(db_path=args.db, adapter=args.adapter, fill_mode=args.fill_mode)
         decision = runner.run_once(bar)
         print(json.dumps(decision, indent=2))
         return
 
     if args.cmd == "replay-stream":
+        # pass-through adapter is not yet supported by replay helpers; run via CLI run-once/replay-json for adapter control
         replay_stream(args.db, args.stream, contracts_path=args.contracts)
         return
 
     if args.cmd == "replay-json":
+        # replay_json builds its own runner internally today; for adapter control use run-once path or extend replay helpers
         replay_json(args.bars, args.db, stream_id=args.stream, contracts_path=args.contracts)
         return
 
