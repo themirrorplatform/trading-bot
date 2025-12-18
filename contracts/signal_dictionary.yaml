@@ -1,0 +1,190 @@
+# SIGNAL DICTIONARY v1.0.0
+# 28 signals, normalized [-1, +1] or [0, 1], with reliability scores
+
+version: "1.0.0"
+
+# Core price/volatility/structure signals (12)
+signals:
+  VWAP_Z:
+    description: "Z-score of price vs VWAP"
+    formula: "clamp((Close - VWAP) / stdev60, -3, +3) / 3"
+    range: [-1, 1]
+    category: "price_structure"
+    
+  VWAP_Slope:
+    description: "VWAP trend normalized by ATR"
+    formula: "clamp(linear_regression_slope(VWAP, 30) / ATR30, -1, +1)"
+    range: [-1, 1]
+    category: "price_structure"
+    
+  ATR_14_N:
+    description: "ATR(14) normalized to time-of-day median"
+    formula: "clamp(ATR14 / median_ATR_bucket, 0, 3) / 3"
+    range: [0, 1]
+    category: "volatility"
+    
+  RangeCompression:
+    description: "ATR(5) / ATR(30) compression ratio"
+    formula: "clamp((ATR5/ATR30 - 0.5) / (1.5 - 0.5), 0, 1)"
+    range: [0, 1]
+    category: "volatility"
+    
+  HHLL_TrendStrength:
+    description: "Higher-high/lower-low structure count"
+    formula: "(HHHL_count - LLHL_count) / 30"
+    range: [-1, 1]
+    category: "trend"
+    
+  BreakoutDistance_N:
+    description: "Distance beyond 60-bar range"
+    formula: "clamp(dist_from_range / ATR14, -2, +2) / 2"
+    range: [-1, 1]
+    category: "breakout"
+    
+  RejectionWick_N:
+    description: "Wick asymmetry indicating rejection"
+    formula: "(upper_wick - lower_wick) / true_range"
+    range: [-1, 1]
+    category: "microstructure"
+    
+  CloseLocationValue:
+    description: "Where close sits in bar range"
+    formula: "((Close - Low) - (High - Close)) / (High - Low + ε)"
+    range: [-1, 1]
+    category: "microstructure"
+    
+  GapFromPrevClose_N:
+    description: "Gap size normalized by ATR"
+    formula: "clamp((Open - PrevClose) / ATR14, -2, +2) / 2"
+    range: [-1, 1]
+    category: "gap"
+    
+  DistanceFromPOC_Proxy:
+    description: "Distance from prior session VWAP"
+    formula: "clamp((Close - VWAP_prior) / stdev_prior, -3, +3) / 3"
+    range: [-1, 1]
+    category: "value"
+    
+  MicroTrend_5:
+    description: "5-bar micro trend"
+    formula: "clamp((Close - Close[-5]) / (ATR14 * sqrt(5)), -1, +1)"
+    range: [-1, 1]
+    category: "trend"
+    
+  RealBodyImpulse_N:
+    description: "Body size relative to ATR"
+    formula: "clamp(|Close - Open| / ATR14, -2, +2) / 2"
+    range: [-1, 1]
+    category: "impulse"
+
+  # Volume/participation signals (8)
+  Vol_Z:
+    description: "Volume z-score"
+    formula: "(Volume - mean60) / stdev60"
+    range: [-3, 3]
+    category: "volume"
+    
+  Vol_Slope_20:
+    description: "Volume trend over 20 bars"
+    formula: "linear_regression_slope(Volume, 20)"
+    range: [-1, 1]
+    category: "volume"
+    
+  EffortVsResult:
+    description: "Volume efficiency"
+    formula: "|Close-Open| / (Volume + ε) normalized by median"
+    range: [0, 1]
+    category: "volume"
+    
+  RangeExpansionOnVolume:
+    description: "Range expansion with volume confirmation"
+    formula: "(TrueRange / ATR30) * max(Vol_Z, 0)"
+    range: [0, 2]
+    category: "volume"
+    
+  ClimaxBar_Flag:
+    description: "Climax bar detection"
+    formula: "1 if (TR > 2*ATR14 and Vol_Z > 2) else 0"
+    range: [0, 1]
+    category: "volume"
+    
+  QuietBar_Flag:
+    description: "Quiet bar detection"
+    formula: "1 if (TR < 0.5*ATR14 and Vol_Z < -1) else 0"
+    range: [0, 1]
+    category: "volume"
+    
+  ConsecutiveHighVolBars:
+    description: "Count of recent high-volume bars"
+    formula: "count(Vol_Z > 1, last N bars)"
+    range: [0, N]
+    category: "volume"
+    
+  ParticipationExpansionIndex:
+    description: "Composite participation metric"
+    formula: "sigmoid(Vol_Z + TR/ATR - EVR)"
+    range: [0, 1]
+    category: "volume"
+
+  # Time-structure/session context (4)
+  SessionPhase:
+    description: "Current session phase code"
+    values:
+      0: "PRE_MARKET"
+      1: "OPENING"
+      2: "MID_MORNING"
+      3: "LUNCH"
+      4: "AFTERNOON"
+      5: "CLOSE"
+      6: "POST_RTH"
+      7: "UNKNOWN"
+    category: "session"
+    
+  OpeningRangeBreak:
+    description: "Distance beyond opening range"
+    formula: "clamp(dist_beyond_OR / ATR14, -2, +2) / 2"
+    range: [-1, 1]
+    category: "session"
+    
+  LunchVoidGate:
+    description: "Lunch window low-activity gate"
+    formula: "1 if (in_lunch and ATR_14_N < 0.5 and Vol_Z < 0) else 0"
+    range: [0, 1]
+    category: "session"
+    
+  CloseMagnetIndex:
+    description: "Late-day VWAP convergence"
+    formula: "sigmoid(-|VWAP_Z| + Vol_Z) if in_power_hour else 0"
+    range: [0, 1]
+    category: "session"
+
+  # Quality/cost/microstructure proxies (4)
+  SpreadProxy_Tickiness:
+    description: "Mid-price change tickiness"
+    formula: "avg_bar_to_bar_mid_changes / TR"
+    range: [0, 1]
+    category: "quality"
+    
+  SlippageRiskProxy:
+    description: "Slippage estimate"
+    formula: "baseline + ATR_14_N * mult + SpreadProxy"
+    range: [0, 5]
+    category: "quality"
+    
+  DVS:
+    description: "Data Validity Score"
+    formula: "see data_contract.yaml"
+    range: [0, 1]
+    category: "quality"
+    
+  FrictionRegimeIndex:
+    description: "Total friction estimate"
+    formula: "base_friction + SlippageRiskProxy + SpreadProxy"
+    range: [0, 1]
+    category: "quality"
+
+# Signal reliability factors
+reliability_factors:
+  DVS_weight: 0.4
+  EQS_weight: 0.3
+  session_context_weight: 0.3

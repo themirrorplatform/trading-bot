@@ -33,9 +33,21 @@ class TradovateAdapter:
         self._orders: Dict[str, OrderRecord] = {}
         self._position: int = 0
         self._last_fill_price: Optional[Decimal] = None
+        self._kill_switch: bool = False
 
     def place_order(self, intent: Any, last_price: Decimal) -> Dict[str, Any]:
-        """Place an order per `OrderIntent`. In SIMULATED mode, auto-fill."""
+        """Place an order per `OrderIntent`. In SIMULATED mode, enforce safety and auto-fill when valid."""
+        if self._kill_switch:
+            return {"order_id": None, "status": "REJECTED", "reason": "KILL_SWITCH_ACTIVE"}
+
+        entry_type = getattr(intent, "entry_type", "MARKET")
+        meta = getattr(intent, "metadata", {}) or {}
+        bracket = meta.get("bracket") if isinstance(meta, dict) else None
+        if entry_type not in ("LIMIT", "STOP_LIMIT"):
+            return {"order_id": None, "status": "REJECTED", "reason": "NO_MARKET_ENTRIES"}
+        if not isinstance(bracket, dict) or "stop_price" not in bracket or "target_price" not in bracket:
+            return {"order_id": None, "status": "REJECTED", "reason": "BRACKET_REQUIRED"}
+
         ts = intent.timestamp
         oid = f"SIM-{int(ts.timestamp()*1000)}"
         rec = OrderRecord(
@@ -57,6 +69,7 @@ class TradovateAdapter:
             "status": rec.status,
             "filled_price": float(last_price),
             "position": self._position,
+            "bracket": bracket,
         }
 
     def flatten_positions(self) -> None:
@@ -72,3 +85,13 @@ class TradovateAdapter:
             "position": self._position,
             "last_fill_price": float(self._last_fill_price) if self._last_fill_price is not None else None,
         }
+
+    def set_kill_switch(self, active: bool) -> None:
+        self._kill_switch = bool(active)
+
+    def get_open_orders(self) -> Dict[str, Any]:
+        return {oid: {
+            "direction": r.direction,
+            "contracts": r.contracts,
+            "status": r.status,
+        } for oid, r in self._orders.items()}

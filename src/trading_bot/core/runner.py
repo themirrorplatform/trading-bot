@@ -16,6 +16,7 @@ from trading_bot.core.state_store import StateStore
 from trading_bot.core.types import Event, stable_json, sha256_hex
 from trading_bot.core.config import load_yaml_contract
 from trading_bot.log.event_store import EventStore
+from trading_bot.log.decision_journal import DecisionJournal, DecisionRecord
 
 
 class BotRunner:
@@ -142,38 +143,112 @@ class BotRunner:
         e = Event.make(stream_id, dt.isoformat(), "DECISION_1M", decision, self.config_hash)
         self.events.append(e)
 
+        # Decision Journal: emit exactly once per cycle
+        journal = DecisionJournal(self.events, stream_id=stream_id, config_hash=self.config_hash)
+        setup_scores = {}
+        try:
+            if isinstance(beliefs, dict) and isinstance(beliefs.get("beliefs"), dict):
+                setup_scores = {k: float(v) for k, v in beliefs["beliefs"].items()}
+        except Exception:
+            setup_scores = {}
+
+        context = {
+            "dvs": float(state.get("dvs", 0) or 0),
+            "eqs": float(state.get("eqs", 0) or 0),
+            "session_phase": signals.get("session_phase_code"),
+            "spread_ticks": signals.get("spread_ticks"),
+        }
+
+        if decision.get("action") == "ORDER_INTENT":
+            # Trade intent summary
+            metadata = decision.get("metadata", {}) or {}
+            setup_id = metadata.get("strategy_id", "UNKNOWN")
+            pe = DecisionJournal.summarize_trade("ENTER", setup_id, None, context)
+            record = DecisionRecord(
+                time=dt.isoformat(),
+                instrument=stream_id,
+                action="ENTER",
+                setup_scores=setup_scores,
+                euc_score=None,
+                reasons={"reason_code": "ENTER", "details": metadata},
+                plain_english=pe,
+                context=context,
+            )
+            journal.log(record)
+        else:
+            # No-trade summary
+            reason = decision.get("reason")
+            reasons = {"reason_code": str(reason), "details": decision.get("metadata", {})}
+            pe = DecisionJournal.summarize_no_trade(setup_scores, reasons, context)
+            record = DecisionRecord(
+                time=dt.isoformat(),
+                instrument=stream_id,
+                action="SKIP",
+                setup_scores=setup_scores,
+                euc_score=None,
+                reasons=reasons,
+                plain_english=pe,
+                context=context,
+            )
+            journal.log(record)
+
         # If order intent, simulate placement and record entry
         if decision["action"] == "ORDER_INTENT":
             intent = decision["intent"]
+            # Enforce limit-only + bracket in SIM to match constitution
+            try:
+                intent.entry_type = "LIMIT"
+            except Exception:
+                pass
+            # Compute bracket prices from stop/target ticks
+            try:
+                tick_size = float(self.signals.tick_size)
+            except Exception:
+                tick_size = 0.25
+            side = 1 if getattr(intent, "direction", "LONG") == "LONG" else -1
+            entry_price = close
+            stop_price = float(entry_price) - side * float(intent.stop_ticks) * tick_size
+            target_price = float(entry_price) + side * float(intent.target_ticks) * tick_size
+            # Inject bracket + limit price into metadata
+            meta = getattr(intent, "metadata", {}) or {}
+            meta["limit_price"] = float(entry_price)
+            meta["bracket"] = {
+                "stop_price": round(stop_price, 2),
+                "target_price": round(target_price, 2),
+                "target_qty": max(1, int(getattr(intent, "contracts", 1) or 1) - 0),
+            }
+            intent.metadata = meta
+
             order_res = self.adapter.place_order(intent, close)
             self.state_store.record_entry(dt)
             oe = Event.make(stream_id, dt.isoformat(), "ORDER_EVENT", order_res, self.config_hash)
             self.events.append(oe)
 
-            # Simulated fills and attribution
-            fill_payload = simulate_fills(
-                {
-                    "direction": intent.direction,
-                    "contracts": intent.contracts,
-                },
-                {"last_price": float(close), "spread_ticks": signals["spread_ticks"]},
-                {"tick_size": float(self.signals.tick_size), "slippage_ticks": signals["slippage_estimate_ticks"], "spread_to_slippage_ratio": 0.5},
-            )
-            fe = Event.make(stream_id, dt.isoformat(), "FILL_EVENT", fill_payload["payload"], self.config_hash)
-            self.events.append(fe)
+            # Only simulate fills and attribute if order accepted/filled
+            if order_res.get("status") in ("FILLED", "PARTIALLY_FILLED", "ACCEPTED", "WORKING"):
+                fill_payload = simulate_fills(
+                    {
+                        "direction": intent.direction,
+                        "contracts": intent.contracts,
+                    },
+                    {"last_price": float(close), "spread_ticks": signals["spread_ticks"]},
+                    {"tick_size": float(self.signals.tick_size), "slippage_ticks": signals["slippage_estimate_ticks"], "spread_to_slippage_ratio": 0.5},
+                )
+                fe = Event.make(stream_id, dt.isoformat(), "FILL_EVENT", fill_payload["payload"], self.config_hash)
+                self.events.append(fe)
 
-            trade_record = {
-                "entry_price": float(close),
-                "exit_price": float(fill_payload["payload"].get("fill_price", close)),
-                "pnl_usd": 0.0,
-                "duration_seconds": 0,
-                "slippage_ticks": fill_payload["payload"].get("slippage_ticks"),
-                "spread_ticks": fill_payload["payload"].get("spread_ticks"),
-                "eqs": float(eqs_val),
-                "dvs": float(dvs_val),
-            }
-            attr = attribute(trade_record, {"rules": [], "default": {"id": "A0_UNCLASSIFIED", "process_score": 0.5, "outcome_score": 0.5}})
-            attr_event = Event.make(stream_id, dt.isoformat(), "SYSTEM_EVENT", {"attribution": attr}, self.config_hash)
-            self.events.append(attr_event)
+                trade_record = {
+                    "entry_price": float(close),
+                    "exit_price": float(fill_payload["payload"].get("fill_price", close)),
+                    "pnl_usd": 0.0,
+                    "duration_seconds": 0,
+                    "slippage_ticks": fill_payload["payload"].get("slippage_ticks"),
+                    "spread_ticks": fill_payload["payload"].get("spread_ticks"),
+                    "eqs": float(eqs_val),
+                    "dvs": float(dvs_val),
+                }
+                attr = attribute(trade_record, {"rules": [], "default": {"id": "A0_UNCLASSIFIED", "process_score": 0.5, "outcome_score": 0.5}})
+                attr_event = Event.make(stream_id, dt.isoformat(), "ATTRIBUTION", attr, self.config_hash)
+                self.events.append(attr_event)
 
         return decision
