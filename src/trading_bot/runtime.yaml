@@ -1,0 +1,7 @@
+# Runtime configuration for adapter selection and defaults
+adapter: tradovate  # tradovate | ninjatrader
+fill_mode: IMMEDIATE  # IMMEDIATE | DELAYED | PARTIAL | TIMEOUT (Tradovate SIM only)
+adapter_kwargs:
+  # For NinjaTrader bridge
+  base_url: http://127.0.0.1:8123
+  auth_token: changeme
