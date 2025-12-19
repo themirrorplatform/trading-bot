@@ -458,16 +458,39 @@ class LiveRunner:
             eqs=eqs_val,
         )
 
-        # Build signals dict
+        # Build signals dict - all 28 V2 signals
         signals_dict = {
             "vwap_z": signal_output.vwap_z,
+            "vwap_slope": signal_output.vwap_slope,
             "atr_14_n": signal_output.atr_14_n,
+            "range_compression": signal_output.range_compression,
+            "hhll_trend_strength": signal_output.hhll_trend_strength,
+            "breakout_distance_n": signal_output.breakout_distance_n,
+            "rejection_wick_n": signal_output.rejection_wick_n,
+            "close_location_value": signal_output.close_location_value,
+            "gap_from_prev_close_n": signal_output.gap_from_prev_close_n,
+            "distance_from_poc_proxy": signal_output.distance_from_poc_proxy,
+            "micro_trend_5": signal_output.micro_trend_5,
+            "real_body_impulse_n": signal_output.real_body_impulse_n,
             "vol_z": signal_output.vol_z,
+            "vol_slope_20": signal_output.vol_slope_20,
+            "effort_vs_result": signal_output.effort_vs_result,
+            "range_expansion_on_volume": signal_output.range_expansion_on_volume,
+            "climax_bar_flag": signal_output.climax_bar_flag,
+            "quiet_bar_flag": signal_output.quiet_bar_flag,
+            "consecutive_high_vol_bars": signal_output.consecutive_high_vol_bars,
+            "participation_expansion_index": signal_output.participation_expansion_index,
             "session_phase": signal_output.session_phase,
+            "opening_range_break": signal_output.opening_range_break,
+            "lunch_void_gate": signal_output.lunch_void_gate,
+            "close_magnet_index": signal_output.close_magnet_index,
+            "spread_proxy_tickiness": signal_output.spread_proxy_tickiness,
+            "slippage_risk_proxy": signal_output.slippage_risk_proxy,
+            "friction_regime_index": signal_output.friction_regime_index,
             "dvs": signal_output.dvs,
+            # From live data feed
             "spread_ticks": float(self._data_feed.get_spread() or 1),
             "slippage_estimate_ticks": 1,
-            # ... other signals
         }
 
         # Compute beliefs
@@ -500,11 +523,32 @@ class LiveRunner:
             risk_state=risk_state,
         )
 
-        # Log events
+        # Convert beliefs to serializable format
+        beliefs_payload = {
+            cid: {
+                "evidence": b.evidence,
+                "likelihood": b.likelihood,
+                "applicability": b.applicability,
+                "effective_likelihood": b.effective_likelihood,
+                "stability": b.stability,
+            }
+            for cid, b in beliefs.items()
+        }
+
+        # Log BELIEFS_1M event
+        b_event = Event.make(self.stream_id, dt.isoformat(), "BELIEFS_1M", beliefs_payload, self._config_hash)
+        self._event_store.append(b_event)
+
+        # Log DECISION_1M event with signals and context for UI
         decision_dict = {
             "action": decision_result.action,
             "reason": str(decision_result.reason) if decision_result.reason else None,
             "metadata": decision_result.metadata,
+            # Include signals for UI display
+            "signals": signals_dict,
+            "dvs": dvs_val,
+            "eqs": eqs_val,
+            "beliefs": {cid: b.effective_likelihood for cid, b in beliefs.items()},
         }
 
         e = Event.make(self.stream_id, dt.isoformat(), "DECISION_1M", decision_dict, self._config_hash)

@@ -188,12 +188,17 @@ class BotRunner:
             for cid, b in beliefs.items()
         }
 
-        # Convert decision result to dict for event logging
+        # Convert decision result to dict for event logging (include signals for UI)
         decision_dict = {
             "action": decision_result.action,
             "reason": str(decision_result.reason) if decision_result.reason else None,
             "metadata": decision_result.metadata,
             "order_intent": decision_result.order_intent,
+            # Include signals and context for UI display
+            "signals": signals_dict,
+            "dvs": dvs_val,
+            "eqs": eqs_val,
+            "beliefs": {cid: b.effective_likelihood for cid, b in beliefs.items()},
         }
 
         # Log beliefs and decision
