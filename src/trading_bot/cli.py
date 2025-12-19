@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import logging
+from pathlib import Path
 from trading_bot.log.event_store import EventStore
 from trading_bot.core.runner import BotRunner
 from trading_bot.tools.replay_runner import replay_stream, replay_json
@@ -75,6 +76,16 @@ def main():
 
     # verify-config - Verify Tradovate and Supabase credentials
     s_verify = sub.add_parser("verify-config", help="Verify API credentials")
+
+    # evolve - Run evolution engine to learn from trades
+    s_evolve = sub.add_parser("evolve", help="Run evolution engine to learn from trades")
+    s_evolve.add_argument("--db", default="data/events.sqlite")
+    s_evolve.add_argument("--contracts", default="src/trading_bot/contracts")
+    s_evolve.add_argument("--force", action="store_true", help="Override weekly cadence check")
+    s_evolve.add_argument("--dry-run", action="store_true", help="Show proposed changes without applying")
+
+    # show-params - Show current learned parameters
+    s_params = sub.add_parser("show-params", help="Show current learned parameters")
 
     args = p.parse_args()
 
@@ -293,6 +304,72 @@ def main():
                 print(f"  {status} {f}")
         else:
             print(f"✗ Contracts directory not found: {contracts_dir}")
+
+        return
+
+    if args.cmd == "evolve":
+        print("Running Evolution Engine...")
+        print("-" * 40)
+
+        from trading_bot.engines.evolution import create_evolution_engine
+
+        engine = create_evolution_engine(
+            db_path=args.db,
+            contracts_path=args.contracts,
+        )
+
+        result = engine.run_evolution(
+            force=args.force,
+            dry_run=args.dry_run,
+        )
+
+        print(f"\nResult: {result.reason}")
+        print(f"Trades analyzed: {result.trades_analyzed}")
+        print(f"Parameters updated: {result.parameters_updated}")
+
+        if result.changes:
+            print("\nChanges:")
+            for key, change in result.changes.items():
+                if isinstance(change, dict) and "old" in change:
+                    print(f"  {key}: {change['old']:.4f} -> {change['new']:.4f} (Δ{change['delta']:+.4f})")
+                else:
+                    print(f"  {key}: {change}")
+
+        if args.dry_run:
+            print("\n(Dry run - no changes applied)")
+
+        return
+
+    if args.cmd == "show-params":
+        print("Learned Parameters")
+        print("-" * 40)
+
+        params_path = Path("data/learned_params.json")
+        if not params_path.exists():
+            print("No learned parameters found.")
+            print("Run 'evolve' command to generate parameters from trades.")
+            return
+
+        with open(params_path, "r") as f:
+            params = json.load(f)
+
+        print(f"\nVersion: {params.get('version', 0)}")
+        print(f"Last updated: {params.get('last_updated', 'Never')}")
+        print(f"Update reason: {params.get('update_reason', 'N/A')}")
+
+        print("\nSignal Weights:")
+        for constraint_id, signals in params.get("signal_weights", {}).items():
+            print(f"  {constraint_id}:")
+            for signal, weight in signals.items():
+                print(f"    {signal}: {weight:.3f}")
+
+        print("\nBelief Thresholds:")
+        for constraint_id, threshold in params.get("belief_thresholds", {}).items():
+            print(f"  {constraint_id}: {threshold:.3f}")
+
+        print("\nDecay Rates:")
+        for constraint_id, rate in params.get("decay_rates", {}).items():
+            print(f"  {constraint_id}: {rate:.3f}")
 
         return
 
