@@ -39,6 +39,7 @@ from trading_bot.core.state_store import StateStore
 from trading_bot.core.types import Event, stable_json, sha256_hex
 from trading_bot.core.config import load_yaml_contract
 from trading_bot.log.decision_journal import DecisionJournal, DecisionRecord
+from trading_bot.engines.evolution import EvolutionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,10 @@ class LiveRunner:
         self._belief: Optional[BeliefEngineV2] = None
         self._decision: Optional[DecisionEngineV2] = None
         self._state_store: Optional[StateStore] = None
+        self._evolution: Optional[EvolutionEngine] = None
+
+        # Trade context tracking for evolution (captured at entry)
+        self._entry_context: Optional[Dict[str, Any]] = None
 
         # Health monitoring
         self._health = HealthCheck(alert_callback=on_alert)
@@ -236,6 +241,8 @@ class LiveRunner:
         self._belief = BeliefEngineV2()
         self._decision = DecisionEngineV2(contracts_path=self.contracts_path)
         self._state_store = StateStore()
+        # Evolution engine for real-time learning (initialized after event_store)
+        # Will be set in _init_stores()
 
         # Load contracts for DVS/EQS
         try:
@@ -277,6 +284,13 @@ class LiveRunner:
                 supabase_url=self._supabase_url,
                 supabase_key=self._supabase_key,
             )
+
+        # Evolution engine for real-time learning
+        self._evolution = EvolutionEngine(
+            event_store=self._event_store,
+            contracts_path=self.contracts_path,
+        )
+        logger.info(f"Evolution engine initialized (params v{self._evolution.params.version})")
 
     def start(self) -> bool:
         """
@@ -556,12 +570,19 @@ class LiveRunner:
 
         # Execute if order intent
         if decision_result.action == "ORDER_INTENT" and decision_result.order_intent:
-            self._execute_order(decision_result, bar, dt)
+            self._execute_order(decision_result, bar, dt, signals_dict, beliefs)
 
         return decision_dict
 
-    def _execute_order(self, decision_result: Any, bar: Bar, dt: datetime) -> None:
-        """Execute order from decision."""
+    def _execute_order(
+        self,
+        decision_result: Any,
+        bar: Bar,
+        dt: datetime,
+        signals_at_entry: Dict[str, Any],
+        beliefs_at_entry: Dict[str, Any],
+    ) -> None:
+        """Execute order from decision and capture context for learning."""
         intent = decision_result.order_intent
         metadata = decision_result.metadata or {}
 
@@ -599,6 +620,23 @@ class LiveRunner:
             contracts = int(intent.get("contracts", 1))
             self._state_store.update_expected_position(contracts * side)
 
+            # Capture entry context for evolution learning
+            self._entry_context = {
+                "entry_time": dt.isoformat(),
+                "entry_price": entry_price,
+                "direction": direction,
+                "contracts": contracts,
+                "template_id": metadata.get("template_id"),
+                "euc_score": metadata.get("euc_score"),
+                "stop_price": stop_price,
+                "target_price": target_price,
+                "signals_at_entry": signals_at_entry,
+                "beliefs_at_entry": {
+                    cid: b.effective_likelihood for cid, b in beliefs_at_entry.items()
+                },
+            }
+            logger.info(f"Entry context captured for learning: template={metadata.get('template_id')}")
+
             # Publish to Supabase
             if self._trade_publisher:
                 self._trade_publisher.publish_trade({
@@ -618,13 +656,48 @@ class LiveRunner:
         self._event_store.append(oe)
 
     def _on_fill(self, fill: Dict[str, Any]) -> None:
-        """Handle fill event from adapter."""
+        """Handle fill event from adapter and trigger learning on trade completion."""
         logger.info(f"Fill: {fill}")
 
         # Update state store
         if fill.get("position") == 0:
             self._health.record_exit()
             self._state_store.set_expected_position(0)
+
+            # Trade complete - trigger learning
+            if self._entry_context and self._evolution:
+                exit_price = float(fill.get("price", 0))
+                entry_price = self._entry_context.get("entry_price", exit_price)
+                direction = self._entry_context.get("direction", "LONG")
+                contracts = self._entry_context.get("contracts", 1)
+
+                # Calculate PnL
+                tick_size = 0.25
+                tick_value = 1.25  # $1.25 per tick for MES
+                price_diff = exit_price - entry_price
+                if direction == "SHORT":
+                    price_diff = -price_diff
+                ticks = price_diff / tick_size
+                pnl_usd = ticks * tick_value * contracts
+
+                # Build trade data for learning
+                trade_data = {
+                    **self._entry_context,
+                    "exit_price": exit_price,
+                    "exit_time": datetime.now(timezone.utc).isoformat(),
+                    "pnl_usd": pnl_usd,
+                }
+
+                # Learn from this trade
+                result = self._evolution.learn_from_trade(trade_data)
+                if result.success and result.parameters_updated > 0:
+                    logger.info(
+                        f"Learned from trade: pnl=${pnl_usd:.2f}, "
+                        f"{result.parameters_updated} params updated"
+                    )
+
+                # Clear entry context
+                self._entry_context = None
 
     def _on_adapter_error(self, error: str) -> None:
         """Handle adapter error."""

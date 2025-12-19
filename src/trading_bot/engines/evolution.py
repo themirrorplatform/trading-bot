@@ -67,14 +67,16 @@ class EvolutionEngine:
     """
     Bounded learning engine that updates parameters based on trade outcomes.
 
+    Supports two modes:
+    1. Real-time learning: Updates after each trade with smaller increments
+    2. Batch learning: Weekly updates with larger allowed changes
+
     Constitutional constraints:
-    - Update cadence: weekly (Friday 16:05 ET)
-    - Min trades: 10 attributed trades required
     - Parameter bounds: Cannot exceed min/max
-    - Max change: Limited change per week
+    - Max change: Limited per update (scaled for mode)
     """
 
-    # Default bounds from constitution
+    # Default bounds from constitution (weekly batch mode)
     BOUNDS = {
         "signal_weights": {"min": 0.0, "max": 1.5, "max_change": 0.05},
         "belief_thresholds": {"min": 0.50, "max": 0.95, "max_change": 0.01},
@@ -82,6 +84,9 @@ class EvolutionEngine:
         "template_stop_buffers": {"min": -2, "max": 2, "max_change": 1},
         "template_time_stops": {"min": 10, "max": 60, "max_change": 2},
     }
+
+    # Real-time learning uses smaller increments (1/20th of weekly for ~20 trades/week)
+    REALTIME_SCALE = 0.05
 
     MIN_TRADES_FOR_UPDATE = 10
 
@@ -419,6 +424,135 @@ class EvolutionEngine:
                 changes[change_key] = {"old": old_val, "new": new_val, "delta": new_val - old_val}
 
         return changes
+
+    def learn_from_trade(
+        self,
+        trade_data: Dict[str, Any],
+    ) -> EvolutionResult:
+        """
+        Learn from a single completed trade in real-time.
+
+        This is the primary learning method - called after each trade.
+        Uses smaller parameter increments than batch mode.
+
+        Args:
+            trade_data: Trade data including:
+                - pnl_usd: Profit/loss in USD
+                - beliefs_at_entry: Dict of constraint beliefs at entry
+                - signals_at_entry: Dict of signal values at entry
+                - template_id: Optional template used
+                - entry_price, exit_price, qty, etc.
+
+        Returns:
+            EvolutionResult with details of what changed
+        """
+        now = datetime.now(ET)
+
+        # Score the trade for learning weight
+        scores = score_post_trade(trade_data)
+        learn_w = scores.learning_weight
+
+        if learn_w < 0.1:
+            return EvolutionResult(
+                success=False,
+                trades_analyzed=1,
+                parameters_updated=0,
+                changes={},
+                reason="LOW_LEARNING_WEIGHT (trade dominated by luck)",
+                timestamp=now.isoformat(),
+            )
+
+        pnl = float(trade_data.get("pnl_usd", 0) or 0)
+        beliefs_at_entry = trade_data.get("beliefs_at_entry", {})
+        signals_at_entry = trade_data.get("signals_at_entry", {})
+
+        # Direction and magnitude of adjustment
+        direction = 1.0 if pnl > 0 else -1.0
+        magnitude = min(1.0, abs(pnl) / 50.0)  # Normalize by $50
+
+        changes = {}
+
+        # Update signal weights for each constraint
+        for constraint_id, belief_val in beliefs_at_entry.items():
+            if constraint_id not in self.params.signal_weights:
+                continue
+
+            for signal_name in self.params.signal_weights[constraint_id]:
+                signal_val = signals_at_entry.get(signal_name, 0)
+                if signal_val == 0:
+                    continue
+
+                # Compute delta: reinforce if aligned with outcome
+                base_delta = direction * magnitude * signal_val * learn_w * 0.1
+                # Scale for real-time (smaller increments)
+                max_change = self.BOUNDS["signal_weights"]["max_change"] * self.REALTIME_SCALE
+                delta = max(-max_change, min(max_change, base_delta))
+
+                old_val = self.params.signal_weights[constraint_id][signal_name]
+                new_val = old_val + delta
+
+                # Apply absolute bounds
+                bounds = self.BOUNDS["signal_weights"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.signal_weights[constraint_id][signal_name] = new_val
+                    change_key = f"signal_weights.{constraint_id}.{signal_name}"
+                    changes[change_key] = {"old": old_val, "new": new_val, "delta": new_val - old_val}
+
+            # Update belief threshold for this constraint
+            if constraint_id in self.params.belief_thresholds:
+                # If won with low belief -> lower threshold
+                # If lost with high belief -> raise threshold
+                base_delta = direction * (1.0 - belief_val) * magnitude * learn_w * 0.01
+                max_change = self.BOUNDS["belief_thresholds"]["max_change"] * self.REALTIME_SCALE
+                delta = max(-max_change, min(max_change, base_delta))
+
+                old_val = self.params.belief_thresholds[constraint_id]
+                new_val = old_val + delta
+
+                bounds = self.BOUNDS["belief_thresholds"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.belief_thresholds[constraint_id] = new_val
+                    change_key = f"belief_thresholds.{constraint_id}"
+                    changes[change_key] = {"old": old_val, "new": new_val, "delta": new_val - old_val}
+
+        if changes:
+            # Update metadata
+            self.params.version += 1
+            self.params.last_updated = now.isoformat()
+            self.params.update_reason = f"REALTIME_LEARN_V{self.params.version}"
+
+            # Persist
+            self._save_params()
+
+            # Log evolution event
+            evolution_event = Event.make(
+                "SYSTEM",
+                now.isoformat(),
+                "EVOLUTION_REALTIME",
+                {
+                    "version": self.params.version,
+                    "pnl_usd": pnl,
+                    "learning_weight": learn_w,
+                    "changes": changes,
+                },
+                sha256_hex(stable_json(asdict(self.params))),
+            )
+            self.event_store.append(evolution_event)
+
+            logger.info(f"Learned from trade: pnl=${pnl:.2f}, {len(changes)} params updated")
+
+        return EvolutionResult(
+            success=True,
+            trades_analyzed=1,
+            parameters_updated=len(changes),
+            changes=changes,
+            reason="REALTIME_LEARNED" if changes else "NO_CHANGES_NEEDED",
+            timestamp=now.isoformat(),
+        )
 
     def run_evolution(
         self,
