@@ -106,7 +106,17 @@ class EvolutionEngine:
     Constitutional constraints:
     - Parameter bounds: Cannot exceed min/max
     - Max change: Limited per update (scaled for mode)
+
+    NEVER RIGHT CONSTITUTION:
+    - Symmetric learning: unlearn from losses as fast as learn from wins
+    - Belief confidence cap: 0.75 maximum (never believe we're fully right)
+    - Decay toward neutral: parameters drift to defaults without confirmation
+    - No success acceleration: win streaks don't compound learning rate
     """
+
+    # Never Right constants
+    MAX_BELIEF_CONFIDENCE = 0.75
+    NEUTRAL_DECAY_PER_TRADE = 0.01  # Decay toward neutral each trade
 
     # Default bounds from constitution (weekly batch mode)
     BOUNDS = {
@@ -572,6 +582,11 @@ class EvolutionEngine:
                     change_key = f"belief_thresholds.{constraint_id}"
                     changes[change_key] = {"old": old_val, "new": new_val, "delta": new_val - old_val}
 
+        # NEVER RIGHT CONSTITUTION: Decay parameters that weren't just updated
+        confirmed_keys = set(changes.keys())
+        decay_changes = self.decay_toward_neutral(confirmed_keys)
+        changes.update(decay_changes)
+
         if changes:
             # Update metadata
             self.params.version += 1
@@ -591,12 +606,16 @@ class EvolutionEngine:
                     "pnl_usd": pnl,
                     "learning_weight": learn_w,
                     "changes": changes,
+                    "decay_applied": len(decay_changes),  # Track neutral decay
                 },
                 sha256_hex(stable_json(asdict(self.params))),
             )
             self.event_store.append(evolution_event)
 
-            logger.info(f"Learned from trade: pnl=${pnl:.2f}, {len(changes)} params updated")
+            logger.info(
+                f"Learned from trade: pnl=${pnl:.2f}, {len(changes) - len(decay_changes)} learned, "
+                f"{len(decay_changes)} decayed toward neutral"
+            )
 
         return EvolutionResult(
             success=True,
@@ -729,7 +748,12 @@ class EvolutionEngine:
         )
         changes.update(in_trade_changes)
 
-        # 3. Notify meta-learner of changes
+        # 3. NEVER RIGHT CONSTITUTION: Decay parameters not just updated
+        confirmed_keys = set(changes.keys())
+        decay_changes = self.decay_toward_neutral(confirmed_keys)
+        changes.update(decay_changes)
+
+        # 4. Notify meta-learner of changes
         if self.meta_learner:
             for key in changes:
                 old_val = changes[key]["old"]
@@ -1003,6 +1027,73 @@ class EvolutionEngine:
     def set_meta_learner(self, meta_learner) -> None:
         """Set meta-learner for learning rate adaptation."""
         self.meta_learner = meta_learner
+
+    def decay_toward_neutral(self, confirmed_params: Optional[set] = None) -> Dict[str, Any]:
+        """
+        NEVER RIGHT CONSTITUTION: Decay parameters toward neutral defaults.
+
+        Parameters that weren't used/confirmed in recent trades drift back
+        toward their initial values. This prevents overconfidence buildup.
+
+        Args:
+            confirmed_params: Set of param keys that were just updated (don't decay these)
+
+        Returns:
+            Dict of parameters that were decayed
+        """
+        if confirmed_params is None:
+            confirmed_params = set()
+
+        changes = {}
+        decay = self.NEUTRAL_DECAY_PER_TRADE
+
+        # Default neutral values for belief thresholds
+        default_thresholds = {"F1": 0.65, "F3": 0.60, "F4": 0.55, "F5": 0.50, "F6": 0.50}
+
+        # Decay belief thresholds toward defaults
+        for constraint_id, default_val in default_thresholds.items():
+            if constraint_id not in self.params.belief_thresholds:
+                continue
+
+            key = f"belief_thresholds.{constraint_id}"
+            if key in confirmed_params:
+                continue  # Just updated, don't decay
+
+            current = self.params.belief_thresholds[constraint_id]
+            if abs(current - default_val) < 0.001:
+                continue  # Already at neutral
+
+            # Decay toward default
+            if current > default_val:
+                new_val = max(default_val, current - decay)
+            else:
+                new_val = min(default_val, current + decay)
+
+            if new_val != current:
+                self.params.belief_thresholds[constraint_id] = new_val
+                changes[key] = {"old": current, "new": new_val, "delta": new_val - current}
+
+        # Decay signal weights toward their defaults (0.25 as neutral)
+        default_weight = 0.25
+        for constraint_id, signals in self.params.signal_weights.items():
+            for signal_name, current in list(signals.items()):
+                key = f"signal_weights.{constraint_id}.{signal_name}"
+                if key in confirmed_params:
+                    continue
+
+                if abs(current - default_weight) < 0.001:
+                    continue
+
+                if current > default_weight:
+                    new_val = max(default_weight, current - decay)
+                else:
+                    new_val = min(default_weight, current + decay)
+
+                if new_val != current:
+                    self.params.signal_weights[constraint_id][signal_name] = new_val
+                    changes[key] = {"old": current, "new": new_val, "delta": new_val - current}
+
+        return changes
 
     def get_in_trade_params(self) -> InTradeParamsState:
         """Get current in-trade parameters for InTradeManager."""

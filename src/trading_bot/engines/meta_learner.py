@@ -53,19 +53,39 @@ class LearningRateState:
 
 @dataclass
 class ParameterConfidence:
-    """Confidence tracking for a parameter."""
+    """
+    Confidence tracking for a parameter.
+
+    NEVER RIGHT CONSTITUTION:
+    - Confidence is CAPPED at 0.75 (never believe we're fully right)
+    - Confidence decays toward neutral (0.5) when no confirming evidence
+    - Symmetric updates: losses reduce confidence as fast as wins increase it
+    """
     param_key: str
     n_updates: int = 0
     n_positive_outcomes: int = 0
+    n_negative_outcomes: int = 0  # Track losses symmetrically
     last_values: List[float] = field(default_factory=list)
     last_outcomes: List[float] = field(default_factory=list)  # PnL after change
-    confidence: float = 0.5  # 0 = no confidence, 1 = high confidence
+    confidence: float = 0.5  # 0 = no confidence, 0.75 = max confidence (never 1.0!)
+    bars_since_confirming: int = 0  # Decay when no confirmation
+
+    # Never Right constants
+    MAX_CONFIDENCE = 0.75
+    NEUTRAL = 0.5
+    DECAY_PER_UPDATE = 0.02
 
     def update(self, new_value: float, outcome_pnl: float) -> None:
-        """Update confidence after observing outcome."""
+        """Update confidence after observing outcome - SYMMETRIC."""
         self.n_updates += 1
+
+        # SYMMETRIC tracking: count wins AND losses equally
         if outcome_pnl > 0:
             self.n_positive_outcomes += 1
+            self.bars_since_confirming = 0  # Reset decay timer
+        else:
+            self.n_negative_outcomes += 1
+            # Losses also reset decay - we're getting information
 
         self.last_values.append(new_value)
         self.last_outcomes.append(outcome_pnl)
@@ -75,18 +95,30 @@ class ParameterConfidence:
             self.last_values = self.last_values[-20:]
             self.last_outcomes = self.last_outcomes[-20:]
 
-        # Compute confidence
+        # Compute confidence - SYMMETRIC with hard cap
         if self.n_updates >= 5:
             win_rate = self.n_positive_outcomes / self.n_updates
-            # Also consider outcome magnitude
-            if self.last_outcomes:
-                avg_outcome = sum(self.last_outcomes) / len(self.last_outcomes)
-                magnitude_factor = 1 / (1 + math.exp(-avg_outcome / 50))  # Sigmoid on avg PnL
-            else:
-                magnitude_factor = 0.5
-            self.confidence = 0.5 * win_rate + 0.5 * magnitude_factor
+            # SYMMETRIC: win_rate directly maps to confidence offset from neutral
+            # win_rate=0.5 -> confidence=0.5 (neutral)
+            # win_rate=1.0 -> confidence=0.75 (capped max)
+            # win_rate=0.0 -> confidence=0.25 (symmetric minimum)
+            confidence_offset = (win_rate - 0.5) * 0.5  # Range: -0.25 to +0.25
+            self.confidence = self.NEUTRAL + confidence_offset
         else:
-            self.confidence = 0.5  # Not enough data
+            self.confidence = self.NEUTRAL  # Not enough data
+
+        # HARD CAP: Never believe we're fully right
+        self.confidence = min(self.MAX_CONFIDENCE, max(1.0 - self.MAX_CONFIDENCE, self.confidence))
+
+    def decay_toward_neutral(self) -> None:
+        """Decay confidence toward neutral when no confirming evidence."""
+        self.bars_since_confirming += 1
+        # Exponential decay toward 0.5
+        decay = self.DECAY_PER_UPDATE
+        if self.confidence > self.NEUTRAL:
+            self.confidence = max(self.NEUTRAL, self.confidence - decay)
+        elif self.confidence < self.NEUTRAL:
+            self.confidence = min(self.NEUTRAL, self.confidence + decay)
 
 
 @dataclass
@@ -168,9 +200,13 @@ class MetaLearner:
     # Thresholds
     DRAWDOWN_FREEZE_THRESHOLD = 0.15    # Freeze learning at 15% DD
     SHARPE_SLOW_THRESHOLD = 0.0         # Slow learning if Sharpe < 0
-    SHARPE_FAST_THRESHOLD = 1.0         # Speed up learning if Sharpe > 1
     MIN_TRADES_FOR_META = 10            # Min trades before meta-learning kicks in
     REGIME_CHANGE_DECAY_MULT = 0.3      # Faster decay after regime change
+
+    # NEVER RIGHT CONSTITUTION - Symmetric learning invariants
+    MAX_PARAM_CONFIDENCE = 0.75         # Never believe we're fully right
+    NEUTRAL_DECAY_RATE = 0.02           # Decay toward neutral per update
+    # NO success-accelerated learning - removed SHARPE_FAST_THRESHOLD
 
     def __init__(
         self,
@@ -261,12 +297,14 @@ class MetaLearner:
         else:
             vol_mult = 1.0
 
-        # Performance adjustment
+        # Performance adjustment - SYMMETRIC LEARNING
+        # Never Right Constitution: unlearn from losses AS FAST as we learn from wins
+        # No success acceleration - that breeds overconfidence
         perf_mult = 1.0
         if self.state.rolling_sharpe_20 < self.SHARPE_SLOW_THRESHOLD:
-            perf_mult = 0.5  # Slow down when losing
-        elif self.state.rolling_sharpe_20 > self.SHARPE_FAST_THRESHOLD:
-            perf_mult = 1.5  # Speed up when winning
+            perf_mult = 0.5  # Slow down when losing (to avoid thrashing)
+        # REMOVED: success acceleration (perf_mult = 1.5 when winning)
+        # The danger is asymmetric confidence accumulation, not learning speed
 
         # Regime change adjustment
         if self.state.regime.bars_since_change < 20:
@@ -530,39 +568,69 @@ class MetaLearner:
             return self.state.param_confidence[param_key].get("confidence", 0.5)
         return 0.5
 
+    def decay_all_confidences(self) -> None:
+        """
+        NEVER RIGHT CONSTITUTION: Decay all parameter confidences toward neutral.
+
+        Call periodically (e.g., after each trade or daily) to ensure
+        the system never breeds confidence in being right.
+        """
+        for param_key, conf_data in self.state.param_confidence.items():
+            current = conf_data.get("confidence", 0.5)
+            # Decay toward neutral (0.5)
+            if current > 0.5:
+                new_conf = max(0.5, current - self.NEUTRAL_DECAY_RATE)
+            elif current < 0.5:
+                new_conf = min(0.5, current + self.NEUTRAL_DECAY_RATE)
+            else:
+                new_conf = current
+
+            # Enforce hard cap
+            new_conf = min(self.MAX_PARAM_CONFIDENCE, new_conf)
+            conf_data["confidence"] = new_conf
+
     def adjust_learning_rates(self) -> None:
         """
         Periodically adjust learning rates based on meta-metrics.
 
         Call this after every N trades or daily.
+
+        NEVER RIGHT CONSTITUTION:
+        - No success acceleration
+        - Confidence capped at 0.75
+        - All confidences decay toward neutral
         """
         effectiveness = self.compute_learning_effectiveness()
         lr = self.state.learning_rates
 
-        # Adjust base rate based on effectiveness
+        # NEVER RIGHT: Decay all confidences toward neutral first
+        self.decay_all_confidences()
+
+        # Adjust base rate based on effectiveness - BUT symmetrically
         if effectiveness > 0.6:
             # Learning is helping - increase slightly
             lr.base_rate = min(0.15, lr.base_rate * 1.1)
         elif effectiveness < 0.4:
-            # Learning is hurting - decrease
-            lr.base_rate = max(0.01, lr.base_rate * 0.8)
+            # Learning is hurting - decrease SYMMETRICALLY (same magnitude)
+            lr.base_rate = max(0.01, lr.base_rate * 0.9)  # Was 0.8, now 0.9 for symmetry
 
-        # Adjust per-category based on confidence
+        # Adjust per-category based on confidence (capped at 0.75)
         categories = ["signal_weights", "belief_thresholds", "in_trade_params"]
         for cat in categories:
             # Find params in this category
             cat_confidences = [
-                self.state.param_confidence[k].get("confidence", 0.5)
+                min(self.MAX_PARAM_CONFIDENCE, self.state.param_confidence[k].get("confidence", 0.5))
                 for k in self.state.param_confidence
                 if k.startswith(cat)
             ]
             if cat_confidences:
                 avg_conf = sum(cat_confidences) / len(cat_confidences)
-                # Higher confidence = faster learning for this category
+                # Higher confidence = faster learning, BUT capped
+                # With max confidence of 0.75, max multiplier is 1.25 (not 1.5)
                 mult_key = f"{cat}_mult"
                 if hasattr(lr, mult_key):
                     current = getattr(lr, mult_key)
-                    new_mult = 0.5 + avg_conf  # Range 0.5 to 1.5
+                    new_mult = 0.5 + avg_conf  # Range 0.5 to 1.25 (capped)
                     setattr(lr, mult_key, 0.9 * current + 0.1 * new_mult)
 
         self.state.version += 1

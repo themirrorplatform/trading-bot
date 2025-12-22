@@ -242,6 +242,11 @@ class InTradeManager:
     5. Implement kill switch
     6. Capture full context for post-trade learning
 
+    NEVER RIGHT CONSTITUTION:
+    - Evidence scores capped at 0.75 (never fully confident)
+    - Symmetric evidence: continuation and reversal treated equally
+    - No confidence compounding
+
     Usage:
         manager = InTradeManager()
         manager.start_trade(context)
@@ -251,6 +256,9 @@ class InTradeManager:
         # When flat, get full history for learning
         history = manager.get_trade_history()
     """
+
+    # NEVER RIGHT: Maximum evidence confidence
+    MAX_EVIDENCE_CONFIDENCE = 0.75
 
     # Evidence weights (must sum to 1.0)
     W_STRUCTURE = 0.30
@@ -455,6 +463,12 @@ class InTradeManager:
         else:
             self.rt.E_signal = 0.5
 
+        # NEVER RIGHT: Cap individual evidence components at 0.75
+        self.rt.E_structure = min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_structure)
+        self.rt.E_pullback = min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_pullback)
+        self.rt.E_momentum = min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_momentum)
+        self.rt.E_signal = min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_signal)
+
         # Aggregate continuation evidence
         self.rt.E_cont = (
             self.W_STRUCTURE * self.rt.E_structure +
@@ -462,7 +476,8 @@ class InTradeManager:
             self.W_MOMENTUM * self.rt.E_momentum +
             self.W_SIGNAL * self.rt.E_signal
         )
-        self.rt.E_cont = max(0.0, min(1.0, self.rt.E_cont))
+        # NEVER RIGHT: Cap aggregate at 0.75 as well
+        self.rt.E_cont = max(0.0, min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_cont))
 
         # Reversal evidence
         # Structure break: price closes below recent swing low (long) / above swing high (short)
@@ -503,14 +518,16 @@ class InTradeManager:
         stale_decay = max(0.0, 1.0 - self.rt.bars_since_new_extreme / max(1, params.stale_bars_max))
         E_cont_adj = self.rt.E_cont * stale_decay
         self.rt.E_net = E_cont_adj - self.rt.E_rev
-        self.rt.E_net = max(-1.0, min(1.0, self.rt.E_net))
+        # NEVER RIGHT: Cap positive side at 0.75 (can still go fully negative for exits)
+        self.rt.E_net = max(-1.0, min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_net))
 
         # Smooth evidence
         self.rt.E_net_smooth = (
             params.beta_smooth * self.rt.E_net +
             (1 - params.beta_smooth) * self.rt.E_net_smooth
         )
-        self.rt.E_net_smooth = max(-1.0, min(1.0, self.rt.E_net_smooth))
+        # NEVER RIGHT: Same cap on smoothed evidence
+        self.rt.E_net_smooth = max(-1.0, min(self.MAX_EVIDENCE_CONFIDENCE, self.rt.E_net_smooth))
 
     def _detect_swings(self) -> None:
         """Detect confirmed swing highs/lows with 2-bar delay."""
