@@ -31,6 +31,35 @@ ET = ZoneInfo("America/New_York")
 
 
 @dataclass
+class InTradeParamsState:
+    """Learnable in-trade management parameters."""
+    # Protection parameters
+    k_protect: float = 1.0           # Protect after +1R
+    k_lock: float = 0.25             # Lock +0.25R when protecting
+    min_bars_before_protect: int = 3
+    theta_protect: float = 0.20      # Min evidence for protection
+
+    # Scaling parameters (R multiples)
+    k_T1: float = 1.0                # First target
+    k_T2: float = 2.0                # Second target
+    k_scale1_lock: float = 0.5       # Lock after T1
+    k_scale2_lock: float = 1.0       # Lock after T2
+
+    # Runner parameters
+    k_trail: float = 0.75            # Trail buffer in ATR
+    theta_runner_entry: float = 0.40 # Min evidence for runner
+
+    # Kill switch
+    theta_kill: float = 0.70         # Emergency exit threshold
+
+    # Evidence weights (must sum to 1)
+    w_structure: float = 0.30
+    w_pullback: float = 0.25
+    w_momentum: float = 0.25
+    w_signal: float = 0.20
+
+
+@dataclass
 class ParameterState:
     """Current learnable parameters with bounds."""
     # Signal weights for belief computation (constraint -> signal -> weight)
@@ -45,6 +74,9 @@ class ParameterState:
     # Template-specific adjustments
     template_stop_buffers: Dict[str, int] = field(default_factory=dict)
     template_time_stops: Dict[str, int] = field(default_factory=dict)
+
+    # In-trade management parameters
+    in_trade: InTradeParamsState = field(default_factory=InTradeParamsState)
 
     # Metadata
     version: int = 1
@@ -85,10 +117,31 @@ class EvolutionEngine:
         "template_time_stops": {"min": 10, "max": 60, "max_change": 2},
     }
 
+    # In-trade parameter bounds
+    IN_TRADE_BOUNDS = {
+        "k_protect": {"min": 0.5, "max": 2.0, "max_change": 0.10},
+        "k_lock": {"min": 0.0, "max": 0.5, "max_change": 0.05},
+        "theta_protect": {"min": 0.0, "max": 0.5, "max_change": 0.02},
+        "k_T1": {"min": 0.5, "max": 2.0, "max_change": 0.10},
+        "k_T2": {"min": 1.0, "max": 4.0, "max_change": 0.15},
+        "k_scale1_lock": {"min": 0.25, "max": 1.0, "max_change": 0.05},
+        "k_scale2_lock": {"min": 0.5, "max": 1.5, "max_change": 0.05},
+        "k_trail": {"min": 0.25, "max": 1.5, "max_change": 0.05},
+        "theta_runner_entry": {"min": 0.2, "max": 0.6, "max_change": 0.02},
+        "theta_kill": {"min": 0.5, "max": 0.9, "max_change": 0.02},
+        "w_structure": {"min": 0.1, "max": 0.5, "max_change": 0.02},
+        "w_pullback": {"min": 0.1, "max": 0.5, "max_change": 0.02},
+        "w_momentum": {"min": 0.1, "max": 0.5, "max_change": 0.02},
+        "w_signal": {"min": 0.05, "max": 0.4, "max_change": 0.02},
+    }
+
     # Real-time learning uses smaller increments (1/20th of weekly for ~20 trades/week)
     REALTIME_SCALE = 0.05
 
     MIN_TRADES_FOR_UPDATE = 10
+
+    # Meta-learner integration (optional)
+    meta_learner = None
 
     def __init__(
         self,
@@ -553,6 +606,407 @@ class EvolutionEngine:
             reason="REALTIME_LEARNED" if changes else "NO_CHANGES_NEEDED",
             timestamp=now.isoformat(),
         )
+
+    def learn_from_trade_history(
+        self,
+        trade_history: Dict[str, Any],
+        learning_rates: Optional[Dict[str, float]] = None,
+    ) -> EvolutionResult:
+        """
+        Learn from complete trade history including in-trade decisions.
+
+        This is the comprehensive learning method that uses:
+        - Entry context (beliefs, signals)
+        - In-trade evidence progression
+        - State transitions and timing
+        - Exit outcomes and attribution
+
+        Args:
+            trade_history: Complete history from InTradeManager.get_trade_history()
+            learning_rates: Optional per-category rates from MetaLearner
+
+        Returns:
+            EvolutionResult with all changes
+        """
+        now = datetime.now(ET)
+
+        if not trade_history:
+            return EvolutionResult(
+                success=False,
+                trades_analyzed=0,
+                parameters_updated=0,
+                changes={},
+                reason="EMPTY_HISTORY",
+                timestamp=now.isoformat(),
+            )
+
+        context = trade_history.get("context", {})
+        runtime = trade_history.get("runtime", {})
+        bar_logs = trade_history.get("bar_logs", [])
+        transitions = trade_history.get("transitions", [])
+
+        # Get learning rates (from meta-learner or defaults)
+        if learning_rates is None:
+            learning_rates = {
+                "signal_weights": self.REALTIME_SCALE,
+                "belief_thresholds": self.REALTIME_SCALE,
+                "in_trade_params": self.REALTIME_SCALE,
+            }
+
+        # Compute trade outcome
+        entry_price = context.get("entry_price", 0)
+        exit_price = runtime.get("exit_price", entry_price)
+        direction = context.get("direction", 1)
+        qty = context.get("qty_total", 1)
+        R_points = context.get("R_points", 1)
+
+        pnl_points = direction * (exit_price - entry_price)
+        pnl_R = pnl_points / max(0.25, R_points)
+        pnl_usd = pnl_points * qty * 5.0  # MES
+
+        # Score for learning weight
+        trade_data = {
+            "pnl_usd": pnl_usd,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "mfe_points": runtime.get("mfe_points", 0),
+            "mae_points": runtime.get("mae_points", 0),
+        }
+        scores = score_post_trade(trade_data)
+        learn_w = scores.learning_weight
+
+        if learn_w < 0.1:
+            return EvolutionResult(
+                success=False,
+                trades_analyzed=1,
+                parameters_updated=0,
+                changes={},
+                reason="LOW_LEARNING_WEIGHT",
+                timestamp=now.isoformat(),
+            )
+
+        changes = {}
+
+        # 1. Learn entry parameters (signal weights, belief thresholds)
+        beliefs_at_entry = context.get("beliefs_at_entry", {})
+        signals_at_entry = context.get("signals_at_entry", {})
+
+        lr_signals = learning_rates.get("signal_weights", self.REALTIME_SCALE)
+        lr_thresholds = learning_rates.get("belief_thresholds", self.REALTIME_SCALE)
+        lr_in_trade = learning_rates.get("in_trade_params", self.REALTIME_SCALE)
+
+        outcome_dir = 1.0 if pnl_usd > 0 else -1.0
+        magnitude = min(1.0, abs(pnl_R))
+
+        # Signal weights
+        for constraint_id, belief_val in beliefs_at_entry.items():
+            if constraint_id not in self.params.signal_weights:
+                continue
+
+            for signal_name in self.params.signal_weights[constraint_id]:
+                signal_val = signals_at_entry.get(signal_name, 0)
+                if signal_val == 0:
+                    continue
+
+                base_delta = outcome_dir * magnitude * signal_val * learn_w * 0.1
+                max_change = self.BOUNDS["signal_weights"]["max_change"] * lr_signals
+                delta = max(-max_change, min(max_change, base_delta))
+
+                old_val = self.params.signal_weights[constraint_id][signal_name]
+                new_val = old_val + delta
+                bounds = self.BOUNDS["signal_weights"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.signal_weights[constraint_id][signal_name] = new_val
+                    key = f"signal_weights.{constraint_id}.{signal_name}"
+                    changes[key] = {"old": old_val, "new": new_val, "delta": new_val - old_val}
+
+        # 2. Learn in-trade parameters from trade history
+        in_trade_changes = self._learn_in_trade_params(
+            context, runtime, bar_logs, transitions,
+            pnl_R, learn_w, lr_in_trade
+        )
+        changes.update(in_trade_changes)
+
+        # 3. Notify meta-learner of changes
+        if self.meta_learner:
+            for key in changes:
+                old_val = changes[key]["old"]
+                new_val = changes[key]["new"]
+                self.meta_learner.record_param_change(key, old_val, new_val)
+
+        if changes:
+            self.params.version += 1
+            self.params.last_updated = now.isoformat()
+            self.params.update_reason = f"FULL_TRADE_LEARN_V{self.params.version}"
+            self._save_params()
+
+            evolution_event = Event.make(
+                "SYSTEM",
+                now.isoformat(),
+                "EVOLUTION_FULL_TRADE",
+                {
+                    "version": self.params.version,
+                    "pnl_usd": pnl_usd,
+                    "pnl_R": pnl_R,
+                    "learning_weight": learn_w,
+                    "changes": changes,
+                    "transitions": len(transitions),
+                    "bars": len(bar_logs),
+                },
+                sha256_hex(stable_json(asdict(self.params))),
+            )
+            self.event_store.append(evolution_event)
+
+            logger.info(
+                f"Full trade learning: pnl={pnl_R:.2f}R, "
+                f"{len(changes)} params updated"
+            )
+
+        return EvolutionResult(
+            success=True,
+            trades_analyzed=1,
+            parameters_updated=len(changes),
+            changes=changes,
+            reason="FULL_TRADE_LEARNED" if changes else "NO_CHANGES_NEEDED",
+            timestamp=now.isoformat(),
+        )
+
+    def _learn_in_trade_params(
+        self,
+        context: Dict[str, Any],
+        runtime: Dict[str, Any],
+        bar_logs: List[Dict[str, Any]],
+        transitions: List[Dict[str, Any]],
+        pnl_R: float,
+        learn_w: float,
+        lr_scale: float,
+    ) -> Dict[str, Any]:
+        """
+        Learn in-trade management parameters from trade execution.
+
+        Analyzes:
+        - Protection timing and profitability
+        - Scale execution quality
+        - Runner performance
+        - Kill switch accuracy
+
+        Returns:
+            Dict of parameter changes
+        """
+        changes = {}
+        outcome_dir = 1.0 if pnl_R > 0 else -1.0
+        magnitude = min(1.0, abs(pnl_R))
+
+        # Get transition info
+        did_protect = any(t["trigger"] == "PROTECT" for t in transitions)
+        did_scale_t1 = runtime.get("T1_hit", False)
+        did_scale_t2 = runtime.get("T2_hit", False)
+        exit_reason = runtime.get("exit_reason", "")
+
+        R_points = context.get("R_points", 1)
+        entry_price = context.get("entry_price", 0)
+        direction = context.get("direction", 1)
+
+        # 1. Protection parameters
+        if did_protect:
+            # Find when protection happened
+            protect_trans = next((t for t in transitions if t["trigger"] == "PROTECT"), None)
+            if protect_trans:
+                bars_to_protect = protect_trans.get("bars_in_trade", 0)
+
+                # If we protected and won, reinforce current protection timing
+                # If we protected and lost, maybe we should have protected sooner
+                if pnl_R > 0:
+                    # Good outcome - current k_protect worked
+                    delta = learn_w * magnitude * 0.02 * lr_scale
+                else:
+                    # Lost - maybe protect sooner (lower k_protect)
+                    delta = -learn_w * magnitude * 0.03 * lr_scale
+
+                old_val = self.params.in_trade.k_protect
+                new_val = old_val + delta
+                bounds = self.IN_TRADE_BOUNDS["k_protect"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.in_trade.k_protect = new_val
+                    changes["in_trade.k_protect"] = {
+                        "old": old_val, "new": new_val, "delta": new_val - old_val
+                    }
+
+        # 2. Scaling parameters - analyze T1/T2 timing
+        if did_scale_t1:
+            t1_price = runtime.get("T1_price", 0)
+            exit_price = runtime.get("exit_price", entry_price)
+
+            # Did we leave money on table by scaling at T1?
+            if direction == 1:
+                post_t1_move = exit_price - t1_price
+            else:
+                post_t1_move = t1_price - exit_price
+
+            post_t1_R = post_t1_move / max(0.25, R_points)
+
+            # If price went much higher after T1, maybe raise T1
+            # If price reversed after T1, current T1 is good
+            if post_t1_R > 0.5:
+                # Scaled too early - raise T1
+                delta = learn_w * min(0.3, post_t1_R * 0.1) * lr_scale
+            elif post_t1_R < -0.5:
+                # Good scaling - reinforce current T1
+                delta = -learn_w * 0.02 * lr_scale
+            else:
+                delta = 0
+
+            if delta != 0:
+                old_val = self.params.in_trade.k_T1
+                new_val = old_val + delta
+                bounds = self.IN_TRADE_BOUNDS["k_T1"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.in_trade.k_T1 = new_val
+                    changes["in_trade.k_T1"] = {
+                        "old": old_val, "new": new_val, "delta": new_val - old_val
+                    }
+
+        # 3. Runner trail parameter
+        if exit_reason == "RUNNER_STOP" and did_scale_t2:
+            # Analyze if trail was too tight or too loose
+            mfe = runtime.get("mfe_points", 0)
+            exit_price = runtime.get("exit_price", entry_price)
+
+            if direction == 1:
+                exit_R = (exit_price - entry_price) / max(0.25, R_points)
+                mfe_R = mfe / max(0.25, R_points)
+            else:
+                exit_R = (entry_price - exit_price) / max(0.25, R_points)
+                mfe_R = mfe / max(0.25, R_points)
+
+            # How much did we give back?
+            giveback_R = mfe_R - exit_R
+
+            if giveback_R > 1.0:
+                # Gave back a lot - tighten trail
+                delta = -learn_w * min(0.05, giveback_R * 0.02) * lr_scale
+            elif giveback_R < 0.3 and exit_R > 1.5:
+                # Tight trail working well - maybe loosen slightly
+                delta = learn_w * 0.01 * lr_scale
+            else:
+                delta = 0
+
+            if delta != 0:
+                old_val = self.params.in_trade.k_trail
+                new_val = old_val + delta
+                bounds = self.IN_TRADE_BOUNDS["k_trail"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.in_trade.k_trail = new_val
+                    changes["in_trade.k_trail"] = {
+                        "old": old_val, "new": new_val, "delta": new_val - old_val
+                    }
+
+        # 4. Kill switch threshold
+        if exit_reason == "KILL_SWITCH":
+            # Evaluate if kill switch was correct
+            if pnl_R < -0.5:
+                # Kill switch saved us - reinforce current threshold
+                delta = -learn_w * 0.01 * lr_scale  # Lower threshold = more sensitive
+            elif pnl_R > 0.5:
+                # Kill switch was false alarm - raise threshold
+                delta = learn_w * 0.02 * lr_scale
+
+                old_val = self.params.in_trade.theta_kill
+                new_val = old_val + delta
+                bounds = self.IN_TRADE_BOUNDS["theta_kill"]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    self.params.in_trade.theta_kill = new_val
+                    changes["in_trade.theta_kill"] = {
+                        "old": old_val, "new": new_val, "delta": new_val - old_val
+                    }
+
+        # 5. Evidence weights - analyze which evidence was predictive
+        if bar_logs and len(bar_logs) > 5:
+            # Compute average evidence components vs outcome
+            avg_evidence = {
+                "E_structure": 0,
+                "E_pullback": 0,
+                "E_momentum": 0,
+                "E_signal": 0,
+            }
+
+            for log in bar_logs:
+                ev = log.get("evidence", {})
+                for key in avg_evidence:
+                    avg_evidence[key] += ev.get(key, 0.5)
+
+            n_bars = len(bar_logs)
+            for key in avg_evidence:
+                avg_evidence[key] /= n_bars
+
+            # If trade won and a component was high, reinforce that weight
+            # If trade lost and a component was high, reduce that weight
+            weight_map = {
+                "E_structure": "w_structure",
+                "E_pullback": "w_pullback",
+                "E_momentum": "w_momentum",
+                "E_signal": "w_signal",
+            }
+
+            for ev_key, w_key in weight_map.items():
+                ev_val = avg_evidence[ev_key]
+                # How predictive was this component?
+                contribution = (ev_val - 0.5) * 2  # -1 to 1
+
+                # If high and won (or low and lost) -> reinforce
+                # If high and lost (or low and won) -> reduce
+                alignment = outcome_dir * contribution
+
+                delta = learn_w * alignment * 0.01 * lr_scale
+
+                old_val = getattr(self.params.in_trade, w_key)
+                new_val = old_val + delta
+                bounds = self.IN_TRADE_BOUNDS[w_key]
+                new_val = max(bounds["min"], min(bounds["max"], new_val))
+
+                if abs(new_val - old_val) > 1e-6:
+                    setattr(self.params.in_trade, w_key, new_val)
+                    changes[f"in_trade.{w_key}"] = {
+                        "old": old_val, "new": new_val, "delta": new_val - old_val
+                    }
+
+            # Normalize weights to sum to 1
+            self._normalize_evidence_weights()
+
+        return changes
+
+    def _normalize_evidence_weights(self) -> None:
+        """Ensure evidence weights sum to 1.0."""
+        total = (
+            self.params.in_trade.w_structure +
+            self.params.in_trade.w_pullback +
+            self.params.in_trade.w_momentum +
+            self.params.in_trade.w_signal
+        )
+
+        if total > 0 and abs(total - 1.0) > 0.001:
+            self.params.in_trade.w_structure /= total
+            self.params.in_trade.w_pullback /= total
+            self.params.in_trade.w_momentum /= total
+            self.params.in_trade.w_signal /= total
+
+    def set_meta_learner(self, meta_learner) -> None:
+        """Set meta-learner for learning rate adaptation."""
+        self.meta_learner = meta_learner
+
+    def get_in_trade_params(self) -> InTradeParamsState:
+        """Get current in-trade parameters for InTradeManager."""
+        return self.params.in_trade
 
     def run_evolution(
         self,

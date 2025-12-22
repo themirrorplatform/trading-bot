@@ -40,6 +40,15 @@ from trading_bot.core.types import Event, stable_json, sha256_hex
 from trading_bot.core.config import load_yaml_contract
 from trading_bot.log.decision_journal import DecisionJournal, DecisionRecord
 from trading_bot.engines.evolution import EvolutionEngine
+from trading_bot.engines.meta_learner import MetaLearner
+from trading_bot.engines.in_trade_manager import (
+    InTradeManager,
+    InTradeContext,
+    InTradeParams,
+    BarSnapshot,
+    TradeAction,
+    InTradeState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +218,16 @@ class LiveRunner:
         self._decision: Optional[DecisionEngineV2] = None
         self._state_store: Optional[StateStore] = None
         self._evolution: Optional[EvolutionEngine] = None
+        self._meta_learner: Optional[MetaLearner] = None
+        self._in_trade_manager: Optional[InTradeManager] = None
 
         # Trade context tracking for evolution (captured at entry)
         self._entry_context: Optional[Dict[str, Any]] = None
+
+        # Current beliefs and signals (for in-trade manager)
+        self._current_beliefs: Dict[str, Any] = {}
+        self._current_signals: Dict[str, float] = {}
+        self._current_atr: float = 0.0
 
         # Health monitoring
         self._health = HealthCheck(alert_callback=on_alert)
@@ -290,7 +306,22 @@ class LiveRunner:
             event_store=self._event_store,
             contracts_path=self.contracts_path,
         )
-        logger.info(f"Evolution engine initialized (params v{self._evolution.params.version})")
+
+        # Meta-learner for learning rate adaptation
+        self._meta_learner = MetaLearner(
+            event_store=self._event_store,
+            state_path="data/meta_learner_state.json",
+        )
+        self._evolution.set_meta_learner(self._meta_learner)
+
+        # In-trade manager for position management
+        self._in_trade_manager = InTradeManager()
+
+        logger.info(
+            f"Learning system initialized: "
+            f"evolution v{self._evolution.params.version}, "
+            f"meta frozen={self._meta_learner.state.learning_rates.frozen}"
+        )
 
     def start(self) -> bool:
         """
@@ -656,7 +687,7 @@ class LiveRunner:
         self._event_store.append(oe)
 
     def _on_fill(self, fill: Dict[str, Any]) -> None:
-        """Handle fill event from adapter and trigger learning on trade completion."""
+        """Handle fill event from adapter and trigger comprehensive learning."""
         logger.info(f"Fill: {fill}")
 
         # Update state store
@@ -664,40 +695,114 @@ class LiveRunner:
             self._health.record_exit()
             self._state_store.set_expected_position(0)
 
-            # Trade complete - trigger learning
-            if self._entry_context and self._evolution:
-                exit_price = float(fill.get("price", 0))
-                entry_price = self._entry_context.get("entry_price", exit_price)
-                direction = self._entry_context.get("direction", "LONG")
-                contracts = self._entry_context.get("contracts", 1)
+            # Trade complete - trigger comprehensive learning
+            self._learn_from_completed_trade(fill)
 
-                # Calculate PnL
-                tick_size = 0.25
-                tick_value = 1.25  # $1.25 per tick for MES
-                price_diff = exit_price - entry_price
-                if direction == "SHORT":
-                    price_diff = -price_diff
-                ticks = price_diff / tick_size
-                pnl_usd = ticks * tick_value * contracts
+    def _learn_from_completed_trade(self, fill: Dict[str, Any]) -> None:
+        """
+        Comprehensive learning from completed trade.
 
-                # Build trade data for learning
-                trade_data = {
-                    **self._entry_context,
-                    "exit_price": exit_price,
-                    "exit_time": datetime.now(timezone.utc).isoformat(),
-                    "pnl_usd": pnl_usd,
-                }
+        Integrates:
+        1. InTradeManager history (if available)
+        2. MetaLearner learning rates
+        3. EvolutionEngine parameter updates
+        4. MetaLearner outcome tracking
+        """
+        if not self._evolution:
+            return
 
-                # Learn from this trade
-                result = self._evolution.learn_from_trade(trade_data)
+        exit_price = float(fill.get("price", 0))
+
+        # Get learning rates from meta-learner
+        learning_rates = None
+        if self._meta_learner:
+            should_learn, reason = self._meta_learner.should_learn()
+            if not should_learn:
+                logger.info(f"Learning skipped: {reason}")
+                return
+            learning_rates = self._meta_learner.get_learning_rates(
+                sigma_norm=self._current_atr / 6.0 if self._current_atr > 0 else 1.0
+            )
+
+        # Check if InTradeManager has history
+        if self._in_trade_manager and self._in_trade_manager.rt.state == InTradeState.FLAT:
+            # Use comprehensive trade history learning
+            trade_history = self._in_trade_manager.get_trade_history()
+            if trade_history:
+                result = self._evolution.learn_from_trade_history(
+                    trade_history=trade_history,
+                    learning_rates=learning_rates,
+                )
+
+                # Compute PnL for meta-learner
+                context = trade_history.get("context", {})
+                runtime = trade_history.get("runtime", {})
+                entry_price = context.get("entry_price", 0)
+                direction = context.get("direction", 1)
+                contracts = context.get("qty_total", 1)
+                actual_exit = runtime.get("exit_price", exit_price)
+
+                pnl_points = direction * (actual_exit - entry_price)
+                pnl_usd = pnl_points * contracts * 5.0
+
+                # Update meta-learner
+                if self._meta_learner:
+                    self._meta_learner.record_trade_outcome(
+                        pnl_usd=pnl_usd,
+                        sigma_norm=self._current_atr / 6.0 if self._current_atr > 0 else 1.0,
+                    )
+
                 if result.success and result.parameters_updated > 0:
                     logger.info(
-                        f"Learned from trade: pnl=${pnl_usd:.2f}, "
+                        f"Full trade learning: pnl=${pnl_usd:.2f}, "
                         f"{result.parameters_updated} params updated"
                     )
 
-                # Clear entry context
-                self._entry_context = None
+                # Clear in-trade manager
+                self._in_trade_manager = InTradeManager()
+                return
+
+        # Fallback to simple learning if no in-trade history
+        if self._entry_context:
+            entry_price = self._entry_context.get("entry_price", exit_price)
+            direction = self._entry_context.get("direction", "LONG")
+            contracts = self._entry_context.get("contracts", 1)
+
+            # Calculate PnL
+            tick_size = 0.25
+            tick_value = 1.25  # $1.25 per tick for MES
+            price_diff = exit_price - entry_price
+            if direction == "SHORT":
+                price_diff = -price_diff
+            ticks = price_diff / tick_size
+            pnl_usd = ticks * tick_value * contracts
+
+            # Build trade data for learning
+            trade_data = {
+                **self._entry_context,
+                "exit_price": exit_price,
+                "exit_time": datetime.now(timezone.utc).isoformat(),
+                "pnl_usd": pnl_usd,
+            }
+
+            # Learn from this trade
+            result = self._evolution.learn_from_trade(trade_data)
+
+            # Update meta-learner
+            if self._meta_learner:
+                self._meta_learner.record_trade_outcome(
+                    pnl_usd=pnl_usd,
+                    sigma_norm=self._current_atr / 6.0 if self._current_atr > 0 else 1.0,
+                )
+
+            if result.success and result.parameters_updated > 0:
+                logger.info(
+                    f"Learned from trade: pnl=${pnl_usd:.2f}, "
+                    f"{result.parameters_updated} params updated"
+                )
+
+            # Clear entry context
+            self._entry_context = None
 
     def _on_adapter_error(self, error: str) -> None:
         """Handle adapter error."""
