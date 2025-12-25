@@ -37,6 +37,10 @@ class ConstraintLikelihood:
     decay_lambda: float  # Decay rate used
 
 
+# Type alias for compatibility with in_trade_manager
+BeliefState = ConstraintLikelihood
+
+
 class BeliefEngineV2:
     """
     Enhanced belief engine with constraint-signal matrix and likelihood calculations.
