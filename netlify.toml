@@ -7,6 +7,7 @@ publish = "dist"
 [build.environment]
 # Cloud mode uses Supabase (set these in Netlify UI)
 VITE_APP_MODE = "cloud"
+NODE_VERSION = "20"
 # VITE_SUPABASE_URL = "https://YOUR.supabase.co"
 # VITE_SUPABASE_ANON_KEY = "YOUR_ANON_KEY"
 # Optional default device
@@ -17,3 +18,22 @@ VITE_APP_MODE = "cloud"
 from = "/*"
 to = "/index.html"
 status = 200
+
+# Headers for security
+[[headers]]
+for = "/*"
+[headers.values]
+  X-Frame-Options = "DENY"
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "strict-origin-when-cross-origin"
+  Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co;"
+
+# Cache static assets
+[[headers]]
+for = "/assets/*"
+[headers.values]
+  Cache-Control = "public, max-age=31536000, immutable"
+
+# Functions directory (for serverless functions if needed)
+[functions]
+directory = "netlify/functions"
