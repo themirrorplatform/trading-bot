@@ -19,6 +19,8 @@ Expression Templates (Constraints):
 
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from pathlib import Path
+import json
 import math
 from decimal import Decimal
 
@@ -35,19 +37,24 @@ class ConstraintLikelihood:
     decay_lambda: float  # Decay rate used
 
 
+# Type alias for compatibility with in_trade_manager
+BeliefState = ConstraintLikelihood
+
+
 class BeliefEngineV2:
     """
     Enhanced belief engine with constraint-signal matrix and likelihood calculations.
-    
+
     Implements:
     - Explicit constraint-signal weight matrix
     - Sigmoid likelihood transformation: L = 1 / (1 + exp(-(a*evidence + b)))
     - Per-constraint decay lambdas for temporal smoothing
     - Applicability gating (time-of-day, DVS, EQS)
     - Stability tracking via EWMA
+    - Optional learned parameters from Evolution Engine
     """
-    
-    def __init__(self):
+
+    def __init__(self, learned_params_path: Optional[str] = None):
         # Constraint-Signal Matrix
         # Format: {constraint_id: {signal_name: weight}}
         self.constraint_signal_matrix = self._build_constraint_signal_matrix()
@@ -87,7 +94,57 @@ class BeliefEngineV2:
         # Stability tracking (EWMA of |Δlikelihood|)
         self.stability_ewma: Dict[str, float] = {}
         self.stability_alpha = 0.2  # EWMA smoothing factor
-    
+
+        # Load learned parameters if available
+        self._load_learned_params(learned_params_path)
+
+    def _load_learned_params(self, params_path: Optional[str]) -> None:
+        """
+        Load learned parameters from Evolution Engine.
+
+        Updates:
+        - constraint_signal_matrix weights
+        - decay_lambdas
+
+        Args:
+            params_path: Path to learned_params.json
+        """
+        if params_path is None:
+            params_path = "data/learned_params.json"
+
+        path = Path(params_path)
+        if not path.exists():
+            return
+
+        try:
+            with open(path, "r") as f:
+                params = json.load(f)
+
+            # Apply learned signal weights
+            learned_weights = params.get("signal_weights", {})
+            for constraint_id, signals in learned_weights.items():
+                if constraint_id in self.constraint_signal_matrix:
+                    for signal_name, weight in signals.items():
+                        if signal_name in self.constraint_signal_matrix[constraint_id]:
+                            self.constraint_signal_matrix[constraint_id][signal_name] = weight
+
+            # Apply learned decay rates
+            learned_decay = params.get("decay_rates", {})
+            for constraint_id, rate in learned_decay.items():
+                if constraint_id in self.decay_lambdas:
+                    self.decay_lambdas[constraint_id] = rate
+
+            version = params.get("version", 0)
+            if version > 0:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"Loaded learned parameters v{version} from {params_path}"
+                )
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not load learned params: {e}")
+
     def _build_constraint_signal_matrix(self) -> Dict[str, Dict[str, float]]:
         """
         Build explicit constraint-signal weight matrix.
