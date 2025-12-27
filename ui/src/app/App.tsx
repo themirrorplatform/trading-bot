@@ -7,7 +7,7 @@ import { useState, useEffect } from 'react';
 import { LiveCockpitComplete } from './components/LiveCockpitComplete';
 import { DemoControlsDrawer } from './components/DemoControlsDrawer';
 import { isUsingLiveData } from '../lib/data/config';
-import { fetchLiveEvents, fetchLatestDecisionEvent, fetchLatestBeliefs } from '../lib/data/queries';
+import { fetchLiveEvents, fetchLatestDecisionEvent, fetchLatestBeliefs, fetchRecentTrades } from '../lib/data/queries';
 import { subscribeToEvents, unsubscribe } from '../lib/data/realtime';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
@@ -49,6 +49,7 @@ export default function App() {
   const [liveEvents, setLiveEvents] = useState(mockCompleteEvents);
   const [liveDecision, setLiveDecision] = useState(mockSkipDecision);
   const [liveBeliefs, setLiveBeliefs] = useState(mockBeliefs);
+  const [liveTrades, setLiveTrades] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Fetch live data on mount
@@ -62,22 +63,27 @@ export default function App() {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const [events, decision, beliefs] = await Promise.all([
+        const [events, decision, beliefs, trades] = await Promise.all([
           fetchLiveEvents('MES_RTH', 100),
           fetchLatestDecisionEvent('MES_RTH'),
           fetchLatestBeliefs('MES_RTH'),
+          fetchRecentTrades('MES_RTH', 50),
         ]);
 
         if (events.length > 0) {
-          setLiveEvents(events.map(e => ({
-            event_id: e.id,
-            stream_id: e.stream_id,
-            ts: e.timestamp,
-            type: e.event_type,
-            payload: e.payload as any,
-            config_hash: e.config_hash,
-            created_at: e.created_at,
-          })));
+          setLiveEvents(events.map(e => {
+            // Transform Supabase event to match Event interface
+            const payload = e.payload as any || {};
+            return {
+              event_id: e.id,
+              timestamp: e.timestamp,
+              event_type: e.event_type as any,
+              severity: payload.severity || 'info',
+              summary: payload.summary || `${e.event_type} event`,
+              payload,
+              reason_codes: payload.reason_codes || [],
+            };
+          }));
         }
 
         if (decision) {
@@ -86,6 +92,10 @@ export default function App() {
 
         if (beliefs) {
           setLiveBeliefs(beliefs.payload as any);
+        }
+
+        if (trades && trades.length > 0) {
+          setLiveTrades(trades);
         }
 
         setConnectionStatus('LIVE');
@@ -102,15 +112,17 @@ export default function App() {
     // Subscribe to realtime updates
     channel = subscribeToEvents('MES_RTH', {
       onEvent: (newEvent) => {
-        setLiveEvents((prev) => [{
+        const payload = newEvent.payload as any || {};
+        const transformedEvent = {
           event_id: newEvent.id,
-          stream_id: newEvent.stream_id,
-          ts: newEvent.timestamp,
-          type: newEvent.event_type,
-          payload: newEvent.payload,
-          config_hash: newEvent.config_hash,
-          created_at: newEvent.created_at,
-        }, ...prev].slice(0, 100));
+          timestamp: newEvent.timestamp,
+          event_type: newEvent.event_type as any,
+          severity: payload.severity || 'info',
+          summary: payload.summary || `${newEvent.event_type} event`,
+          payload,
+          reason_codes: payload.reason_codes || [],
+        };
+        setLiveEvents((prev) => [transformedEvent, ...prev].slice(0, 100));
       },
       onDecision: (decisionEvent) => {
         setLiveDecision(decisionEvent.payload);
@@ -130,6 +142,7 @@ export default function App() {
   // Use live data if available, otherwise fall back to mock
   const events = isUsingLiveData() ? liveEvents : mockCompleteEvents;
   const currentBeliefs = isUsingLiveData() ? liveBeliefs : mockBeliefs;
+  const trades = isUsingLiveData() ? liveTrades : [];
   const currentDecision = isUsingLiveData() ? liveDecision : (
     decisionType === 'TRADE' ? mockTradeDecision :
     decisionType === 'HALT' ? mockHaltDecision :
