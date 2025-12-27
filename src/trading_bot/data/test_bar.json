@@ -1,0 +1,15 @@
+{
+  "ts": "2025-12-26T10:31:00-05:00",
+  "o": 5900.0,
+  "h": 5905.0,
+  "l": 5895.0,
+  "c": 5902.5,
+  "v": 50000,
+  "bid": 5902.0,
+  "ask": 5903.0,
+  "lag_seconds": 0,
+  "outlier_score": 0.0,
+  "price_jump_pct": 0.0,
+  "volume_spike_ratio": 1.0,
+  "data_quality_score": 0.95
+}

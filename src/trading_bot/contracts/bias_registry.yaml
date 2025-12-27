@@ -1,0 +1,290 @@
+# Bias Registry - First 20 High-Leverage Biases
+# Format: BiasSpec fields in YAML
+
+biases:
+  # STRUCTURAL BIASES
+  - id: TREND_BIAS
+    category: STRUCTURAL
+    inputs: [F1, F5, T1]
+    detectors: [impulse_strength, breaks_level_high]
+    strength_fn: "bias_scoring.trend_strength"
+    confidence_fn: "bias_scoring.trend_confidence"
+    invalidation:
+      conditions: ["momentum_reversal", "structure_break"]
+      time_decay: 20  # bars
+    conflicts_with: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    supports: [BREAKOUT_BIAS, VOLATILITY_EXPANSION_BIAS]
+    tags: [ES, MES, INDEX_FUTURES]
+    capital_tier_min: S
+
+  - id: RANGE_BIAS
+    category: STRUCTURAL
+    inputs: [T5, F4]
+    detectors: [range_compression, vwap_deviation]
+    strength_fn: "bias_scoring.range_strength"
+    confidence_fn: "bias_scoring.range_confidence"
+    invalidation:
+      conditions: ["volatility_expansion", "level_break"]
+      time_decay: 15
+    conflicts_with: [TREND_BIAS, BREAKOUT_BIAS]
+    supports: [MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: MEAN_REVERSION_BIAS
+    category: STRUCTURAL
+    inputs: [F4, T5]
+    detectors: [vwap_deviation, range_compression]
+    strength_fn: "bias_scoring.reversion_strength"
+    confidence_fn: "bias_scoring.reversion_confidence"
+    invalidation:
+      conditions: ["trend_established", "breakout_confirmed"]
+      time_decay: 10
+    conflicts_with: [TREND_BIAS, BREAKOUT_BIAS]
+    supports: [RANGE_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: BREAKOUT_BIAS
+    category: STRUCTURAL
+    inputs: [F5, T5, F1]
+    detectors: [breaks_level_high, volatility_expansion, impulse_strength]
+    strength_fn: "bias_scoring.breakout_strength"
+    confidence_fn: "bias_scoring.breakout_confidence"
+    invalidation:
+      conditions: ["failed_breakout", "immediate_reversal"]
+      time_decay: 5
+    conflicts_with: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    supports: [TREND_BIAS, VOLATILITY_EXPANSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: VOLATILITY_EXPANSION_BIAS
+    category: VOLATILITY
+    inputs: [T5]
+    detectors: [volatility_expansion, impulse_strength]
+    strength_fn: "bias_scoring.vol_expansion_strength"
+    confidence_fn: "bias_scoring.vol_expansion_confidence"
+    invalidation:
+      conditions: ["volatility_collapse"]
+      time_decay: 8
+    conflicts_with: [RANGE_BIAS]
+    supports: [BREAKOUT_BIAS, TREND_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  # LIQUIDITY BIASES
+  - id: LIQUIDITY_SWEEP_REVERSAL_BIAS
+    category: LIQUIDITY
+    inputs: [F4, F5]
+    detectors: [sweep_then_reject, vwap_deviation]
+    strength_fn: "bias_scoring.sweep_reversal_strength"
+    confidence_fn: "bias_scoring.sweep_reversal_confidence"
+    invalidation:
+      conditions: ["continuation_confirmed"]
+      time_decay: 3
+    conflicts_with: [TREND_BIAS]
+    supports: [MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: STOP_RUN_BIAS
+    category: LIQUIDITY
+    inputs: [F5, T5]
+    detectors: [breaks_level_high, sweep_then_reject]
+    strength_fn: "bias_scoring.stop_run_strength"
+    confidence_fn: "bias_scoring.stop_run_confidence"
+    invalidation:
+      conditions: ["no_reversal_after_sweep"]
+      time_decay: 2
+    conflicts_with: [BREAKOUT_BIAS]
+    supports: [LIQUIDITY_SWEEP_REVERSAL_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  - id: ABSORPTION_BIAS
+    category: LIQUIDITY
+    inputs: [T5]
+    detectors: [absorption_proxy, delta_divergence]
+    strength_fn: "bias_scoring.absorption_strength"
+    confidence_fn: "bias_scoring.absorption_confidence"
+    invalidation:
+      conditions: ["volume_dries_up"]
+      time_decay: 5
+    conflicts_with: [IMPULSE_BIAS]
+    supports: [MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: B
+
+  # TIME-BASED BIASES
+  - id: NY_OPEN_VOLATILITY_BIAS
+    category: TIME
+    inputs: [T5]
+    detectors: [session_transition_ny_open, volatility_expansion]
+    strength_fn: "bias_scoring.ny_open_strength"
+    confidence_fn: "bias_scoring.ny_open_confidence"
+    invalidation:
+      conditions: ["session_mature"]
+      time_decay: 12  # 1 hour in 5m bars
+    conflicts_with: [RANGE_BIAS]
+    supports: [BREAKOUT_BIAS, TREND_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  - id: LONDON_OPEN_EXPANSION_BIAS
+    category: TIME
+    inputs: [T5]
+    detectors: [session_transition_london_open, volatility_expansion]
+    strength_fn: "bias_scoring.london_open_strength"
+    confidence_fn: "bias_scoring.london_open_confidence"
+    invalidation:
+      conditions: ["session_mature"]
+      time_decay: 12
+    conflicts_with: [RANGE_BIAS]
+    supports: [BREAKOUT_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  - id: MIDDAY_REVERSION_BIAS
+    category: TIME
+    inputs: [F4, T5]
+    detectors: [vwap_deviation, range_compression]
+    strength_fn: "bias_scoring.midday_reversion_strength"
+    confidence_fn: "bias_scoring.midday_reversion_confidence"
+    invalidation:
+      conditions: ["power_hour_approach"]
+      time_decay: 24  # 2 hours
+    conflicts_with: [TREND_BIAS, BREAKOUT_BIAS]
+    supports: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: POWER_HOUR_TREND_BIAS
+    category: TIME
+    inputs: [F1, F5]
+    detectors: [impulse_strength, breaks_level_high]
+    strength_fn: "bias_scoring.power_hour_strength"
+    confidence_fn: "bias_scoring.power_hour_confidence"
+    invalidation:
+      conditions: ["session_close_approach"]
+      time_decay: 12
+    conflicts_with: [RANGE_BIAS]
+    supports: [TREND_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  # PSYCHOLOGICAL BIASES
+  - id: PANIC_SELLING_BIAS
+    category: PSYCHOLOGICAL
+    inputs: [F5, T5]
+    detectors: [impulse_strength, volatility_expansion]
+    strength_fn: "bias_scoring.panic_strength"
+    confidence_fn: "bias_scoring.panic_confidence"
+    invalidation:
+      conditions: ["stabilization"]
+      time_decay: 6
+    conflicts_with: []
+    supports: [MEAN_REVERSION_BIAS, ABSORPTION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: B
+
+  - id: FOMO_BIAS
+    category: PSYCHOLOGICAL
+    inputs: [F5, F1]
+    detectors: [impulse_strength, breaks_level_high]
+    strength_fn: "bias_scoring.fomo_strength"
+    confidence_fn: "bias_scoring.fomo_confidence"
+    invalidation:
+      conditions: ["exhaustion"]
+      time_decay: 4
+    conflicts_with: []
+    supports: [TREND_BIAS, BREAKOUT_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  # TECHNICAL BIASES
+  - id: ROUND_NUMBER_MAGNET_BIAS
+    category: TECHNICAL
+    inputs: [F4]
+    detectors: [vwap_deviation]
+    strength_fn: "bias_scoring.round_number_strength"
+    confidence_fn: "bias_scoring.round_number_confidence"
+    invalidation:
+      conditions: ["level_broken"]
+      time_decay: 8
+    conflicts_with: []
+    supports: [MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  # META BIASES
+  - id: STRATEGY_CROWDING_BIAS
+    category: META
+    inputs: [F1, F4, F5]
+    detectors: [delta_divergence, absorption_proxy]
+    strength_fn: "bias_scoring.crowding_strength"
+    confidence_fn: "bias_scoring.crowding_confidence"
+    invalidation:
+      conditions: ["dispersion"]
+      time_decay: 10
+    conflicts_with: [TREND_BIAS]
+    supports: [MEAN_REVERSION_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: B
+
+  - id: FALSE_SIGNAL_CASCADE_BIAS
+    category: META
+    inputs: [F1, F5]
+    detectors: [sweep_then_reject, delta_divergence]
+    strength_fn: "bias_scoring.false_cascade_strength"
+    confidence_fn: "bias_scoring.false_cascade_confidence"
+    invalidation:
+      conditions: ["genuine_breakout"]
+      time_decay: 6
+    conflicts_with: [BREAKOUT_BIAS]
+    supports: []
+    tags: [ES, MES]
+    capital_tier_min: A
+
+  # EXISTENTIAL STATES
+  - id: LIQUIDITY_VACUUM_BIAS
+    category: EXISTENTIAL
+    inputs: [T5]
+    detectors: [volatility_expansion, absorption_proxy]
+    strength_fn: "bias_scoring.vacuum_strength"
+    confidence_fn: "bias_scoring.vacuum_confidence"
+    invalidation:
+      conditions: ["liquidity_return"]
+      time_decay: 3
+    conflicts_with: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    supports: []
+    tags: [ES, MES]
+    capital_tier_min: B
+
+  - id: DEAD_MARKET_BIAS
+    category: EXISTENTIAL
+    inputs: [T5]
+    detectors: [range_compression]
+    strength_fn: "bias_scoring.dead_market_strength"
+    confidence_fn: "bias_scoring.dead_market_confidence"
+    invalidation:
+      conditions: ["any_movement"]
+      time_decay: 20
+    conflicts_with: [TREND_BIAS, BREAKOUT_BIAS, VOLATILITY_EXPANSION_BIAS]
+    supports: []
+    tags: [ES, MES]
+    capital_tier_min: S
+
+  - id: MARKET_SILENCE_BIAS
+    category: EXISTENTIAL
+    inputs: [T5, F4]
+    detectors: [range_compression, vwap_deviation]
+    strength_fn: "bias_scoring.silence_strength"
+    confidence_fn: "bias_scoring.silence_confidence"
+    invalidation:
+      conditions: ["event_catalyst"]
+      time_decay: 30
+    conflicts_with: [BREAKOUT_BIAS, VOLATILITY_EXPANSION_BIAS]
+    supports: [DEAD_MARKET_BIAS]
+    tags: [ES, MES]
+    capital_tier_min: S

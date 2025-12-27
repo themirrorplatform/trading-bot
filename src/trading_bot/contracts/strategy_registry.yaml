@@ -1,0 +1,250 @@
+# Strategy Registry - First 20 Core Strategy Archetypes
+
+strategies:
+  # TREND STRATEGIES
+  - id: INTERMEDIATE_TREND_FOLLOWING
+    strategy_class: TREND
+    bias_dependencies: [TREND_BIAS, VOLATILITY_EXPANSION_BIAS]
+    signature_detectors: [impulse_strength, breaks_level_high]
+    success_metrics: [continuation_rate, avg_winner_size]
+    failure_signatures: [sweep_then_reject, delta_divergence]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: medium
+      time_window: 30-120  # bars
+
+  - id: TREND_PULLBACK_ENTRIES
+    strategy_class: TREND
+    bias_dependencies: [TREND_BIAS, MEAN_REVERSION_BIAS]
+    signature_detectors: [vwap_deviation, retest_holds]
+    success_metrics: [retest_success_rate]
+    failure_signatures: [sweep_then_reject]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 2.0
+      slippage_sensitivity: low
+      time_window: 10-40
+
+  # MEAN REVERSION STRATEGIES
+  - id: RANGE_MEAN_REVERSION
+    strategy_class: MEAN_REVERSION
+    bias_dependencies: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    signature_detectors: [vwap_deviation, range_compression]
+    success_metrics: [reversion_rate, time_to_mean]
+    failure_signatures: [breaks_level_high, volatility_expansion]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.0
+      slippage_sensitivity: low
+      time_window: 5-20
+
+  - id: VWAP_REVERSION
+    strategy_class: MEAN_REVERSION
+    bias_dependencies: [MEAN_REVERSION_BIAS, MIDDAY_REVERSION_BIAS]
+    signature_detectors: [vwap_deviation]
+    success_metrics: [reversion_rate]
+    failure_signatures: [impulse_strength, volatility_expansion]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.2
+      slippage_sensitivity: low
+      time_window: 5-30
+
+  - id: EXTREME_WICK_REVERSION
+    strategy_class: MEAN_REVERSION
+    bias_dependencies: [MEAN_REVERSION_BIAS, PANIC_SELLING_BIAS]
+    signature_detectors: [sweep_then_reject, vwap_deviation]
+    success_metrics: [wick_reversion_rate]
+    failure_signatures: [impulse_strength]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: high
+      time_window: 3-15
+
+  # BREAKOUT STRATEGIES
+  - id: RANGE_BREAKOUT
+    strategy_class: BREAKOUT
+    bias_dependencies: [BREAKOUT_BIAS, VOLATILITY_EXPANSION_BIAS]
+    signature_detectors: [breaks_level_high, volatility_expansion, impulse_strength]
+    success_metrics: [breakout_continuation_rate]
+    failure_signatures: [sweep_then_reject, absorption_proxy]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 2.0
+      slippage_sensitivity: high
+      time_window: 5-30
+
+  - id: OPENING_RANGE_BREAKOUT
+    strategy_class: BREAKOUT
+    bias_dependencies: [BREAKOUT_BIAS, NY_OPEN_VOLATILITY_BIAS]
+    signature_detectors: [session_transition_ny_open, breaks_level_high, impulse_strength]
+    success_metrics: [orb_success_rate]
+    failure_signatures: [sweep_then_reject]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.8
+      slippage_sensitivity: high
+      time_window: 5-20
+
+  - id: VOLATILITY_COMPRESSION_BREAKOUT
+    strategy_class: BREAKOUT
+    bias_dependencies: [BREAKOUT_BIAS, VOLATILITY_EXPANSION_BIAS]
+    signature_detectors: [range_compression, volatility_expansion, impulse_strength]
+    success_metrics: [squeeze_breakout_rate]
+    failure_signatures: [absorption_proxy]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 2.5
+      slippage_sensitivity: medium
+      time_window: 10-40
+
+  # LIQUIDITY STRATEGIES
+  - id: STOP_HUNT_TRADING
+    strategy_class: LIQUIDITY
+    bias_dependencies: [STOP_RUN_BIAS, LIQUIDITY_SWEEP_REVERSAL_BIAS]
+    signature_detectors: [sweep_then_reject, breaks_level_high]
+    success_metrics: [sweep_reversal_rate]
+    failure_signatures: [impulse_strength]
+    recommended_postures: [ALIGN, FADE]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: high
+      time_window: 2-10
+
+  - id: LIQUIDITY_SWEEP_ENTRIES
+    strategy_class: LIQUIDITY
+    bias_dependencies: [LIQUIDITY_SWEEP_REVERSAL_BIAS]
+    signature_detectors: [sweep_then_reject, vwap_deviation]
+    success_metrics: [sweep_reversal_rate, mean_reversion_time]
+    failure_signatures: [impulse_strength, volatility_expansion]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.8
+      slippage_sensitivity: high
+      time_window: 3-12
+
+  - id: ABSORPTION_FADE
+    strategy_class: LIQUIDITY
+    bias_dependencies: [ABSORPTION_BIAS, MEAN_REVERSION_BIAS]
+    signature_detectors: [absorption_proxy, delta_divergence]
+    success_metrics: [absorption_reversal_rate]
+    failure_signatures: [impulse_strength]
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.3
+      slippage_sensitivity: medium
+      time_window: 5-20
+
+  # TIME-BASED STRATEGIES
+  - id: OPENING_DRIVE
+    strategy_class: TIME_BASED
+    bias_dependencies: [NY_OPEN_VOLATILITY_BIAS, TREND_BIAS]
+    signature_detectors: [session_transition_ny_open, impulse_strength]
+    success_metrics: [open_drive_continuation_rate]
+    failure_signatures: [absorption_proxy]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: high
+      time_window: 3-15
+
+  - id: MIDDAY_FADE
+    strategy_class: TIME_BASED
+    bias_dependencies: [MIDDAY_REVERSION_BIAS, RANGE_BIAS]
+    signature_detectors: [vwap_deviation, range_compression]
+    success_metrics: [midday_reversion_rate]
+    failure_signatures: [breaks_level_high, impulse_strength]
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.2
+      slippage_sensitivity: low
+      time_window: 10-40
+
+  - id: POWER_HOUR_TREND
+    strategy_class: TIME_BASED
+    bias_dependencies: [POWER_HOUR_TREND_BIAS, TREND_BIAS]
+    signature_detectors: [impulse_strength, breaks_level_high]
+    success_metrics: [power_hour_continuation_rate]
+    failure_signatures: [absorption_proxy]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: medium
+      time_window: 10-30
+
+  # PSYCHOLOGICAL FADE STRATEGIES
+  - id: PANIC_FADE
+    strategy_class: MEAN_REVERSION
+    bias_dependencies: [PANIC_SELLING_BIAS, ABSORPTION_BIAS]
+    signature_detectors: [impulse_strength, volatility_expansion, absorption_proxy]
+    success_metrics: [panic_reversal_rate]
+    failure_signatures: [impulse_strength]  # Continued selling
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 2.0
+      slippage_sensitivity: very_high
+      time_window: 3-12
+
+  - id: EUPHORIA_FADE
+    strategy_class: MEAN_REVERSION
+    bias_dependencies: [FOMO_BIAS, ABSORPTION_BIAS]
+    signature_detectors: [impulse_strength, delta_divergence]
+    success_metrics: [euphoria_reversal_rate]
+    failure_signatures: [impulse_strength]  # Continued buying
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.8
+      slippage_sensitivity: high
+      time_window: 5-15
+
+  # META STRATEGIES
+  - id: FAILED_BREAKOUT_TRAP
+    strategy_class: META
+    bias_dependencies: [STOP_RUN_BIAS, FALSE_SIGNAL_CASCADE_BIAS]
+    signature_detectors: [sweep_then_reject, breaks_level_high]
+    success_metrics: [trap_reversal_rate]
+    failure_signatures: [impulse_strength]
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.5
+      slippage_sensitivity: high
+      time_window: 2-8
+
+  - id: STRATEGY_CROWDING_FADE
+    strategy_class: META
+    bias_dependencies: [STRATEGY_CROWDING_BIAS, ABSORPTION_BIAS]
+    signature_detectors: [absorption_proxy, delta_divergence]
+    success_metrics: [crowding_reversal_rate]
+    failure_signatures: [impulse_strength]
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.8
+      slippage_sensitivity: medium
+      time_window: 5-20
+
+  # RANGE STRATEGIES
+  - id: RANGE_HIGH_FADE
+    strategy_class: RANGE
+    bias_dependencies: [RANGE_BIAS, MEAN_REVERSION_BIAS]
+    signature_detectors: [vwap_deviation, range_compression]
+    success_metrics: [range_fade_rate]
+    failure_signatures: [breaks_level_high, volatility_expansion]
+    recommended_postures: [FADE]
+    risk_profile:
+      typical_R: 1.0
+      slippage_sensitivity: low
+      time_window: 5-20
+
+  - id: BALANCE_AREA_SCALPING
+    strategy_class: RANGE
+    bias_dependencies: [RANGE_BIAS, DEAD_MARKET_BIAS]
+    signature_detectors: [range_compression, vwap_deviation]
+    success_metrics: [scalp_win_rate, avg_scalp_size]
+    failure_signatures: [volatility_expansion]
+    recommended_postures: [ALIGN]
+    risk_profile:
+      typical_R: 0.5
+      slippage_sensitivity: very_low
+      time_window: 2-8

@@ -1,0 +1,167 @@
+{
+  "timestamp_utc": "2025-12-27T20:23:13.291997+00:00",
+  "adapter": "ibkr",
+  "mode": "LIVE",
+  "go": true,
+  "reasons": [],
+  "warnings": [
+    {
+      "code": "DATA_DELAYED",
+      "message": "Market data quality is DELAYED."
+    },
+    {
+      "code": "LEVELS_UNAVAILABLE",
+      "message": "Readiness levels are not available (sparse data or off-hours)."
+    },
+    {
+      "code": "NO_RECENT_TICK",
+      "message": "No recent market data tick available."
+    }
+  ],
+  "checks": {
+    "status": {
+      "timestamp": "2025-12-27T20:23:13.838555",
+      "mode": "LIVE",
+      "connected": true,
+      "execution_enabled": false,
+      "session_open": false,
+      "data_mode": 4,
+      "data_quality": "DELAYED",
+      "last_tick_ts": "2025-12-27T20:23:14.369380+00:00",
+      "last_hist_bar_ts": null,
+      "primary_contract": {
+        "conId": 750150186,
+        "lastTradeDate": "20260320",
+        "symbol": "MES"
+      },
+      "dte": 83,
+      "contract_month": "20260320",
+      "account": {
+        "equity": 1017588.24,
+        "buying_power": 4061306.92,
+        "maintenance_margin": 0.0,
+        "initial_margin": 0.0,
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 0.0,
+        "raw": {
+          "AccountType": "INDIVIDUAL",
+          "Cushion": "0.997778",
+          "DayTradesRemaining": "-1",
+          "DayTradesRemainingT+1": "-1",
+          "DayTradesRemainingT+2": "-1",
+          "DayTradesRemainingT+3": "-1",
+          "DayTradesRemainingT+4": "-1",
+          "LookAheadNextChange": "0",
+          "AccruedCash": "2261.51",
+          "AvailableFunds": "1015326.73",
+          "BuyingPower": "4061306.92",
+          "EquityWithLoanValue": "1015326.73",
+          "ExcessLiquidity": "1015326.73",
+          "FullAvailableFunds": "1015326.73",
+          "FullExcessLiquidity": "1015326.73",
+          "FullInitMarginReq": "0.00",
+          "FullMaintMarginReq": "0.00",
+          "GrossPositionValue": "0.00",
+          "InitMarginReq": "0.00",
+          "LookAheadAvailableFunds": "1015326.73",
+          "LookAheadExcessLiquidity": "1015326.73",
+          "LookAheadInitMarginReq": "0.00",
+          "LookAheadMaintMarginReq": "0.00",
+          "MaintMarginReq": "0.00",
+          "NetLiquidation": "1017588.24",
+          "PreviousDayEquityWithLoanValue": "1015326.73",
+          "RegTEquity": "1017588.24",
+          "RegTMargin": "0.00",
+          "SMA": "1017588.24",
+          "TotalCashValue": "1015326.73",
+          "Currency": "BASE",
+          "CashBalance": "1015326.73",
+          "TotalCashBalance": "1015326.73",
+          "StockMarketValue": "0.00",
+          "OptionMarketValue": "0.00",
+          "FutureOptionValue": "0.00",
+          "FuturesPNL": "0.00",
+          "NetLiquidationByCurrency": "1017588.24",
+          "UnrealizedPnL": "0.00",
+          "RealizedPnL": "0.00",
+          "ExchangeRate": "1.00",
+          "FundValue": "0.00",
+          "NetDividend": "0.00",
+          "MutualFundValue": "0.00",
+          "MoneyMarketFundValue": "0.00",
+          "CorporateBondValue": "0.00",
+          "TBondValue": "0.00",
+          "TBillValue": "0.00",
+          "WarrantValue": "0.00",
+          "FxCashBalance": "0.00",
+          "AccountOrGroup": "All",
+          "RealCurrency": "BASE",
+          "IssuerOptionValue": "0.00",
+          "Cryptocurrency": "0.00"
+        }
+      }
+    },
+    "readiness": {
+      "timestamp": "2025-12-27T20:23:13.291997+00:00",
+      "now_utc": "2025-12-27T20:23:13.291997+00:00",
+      "now_et": "2025-12-27T15:23:13.291997-05:00",
+      "bars_converted_to": "America/New_York",
+      "bars_timezone_detected": "US/Central or US/Eastern from IBKR",
+      "last_close": 6977.0,
+      "atr_proxy": 2.24,
+      "realized_vol_proxy": 0.0002,
+      "trend_slope_proxy": -0.1391,
+      "regime": "CHOP",
+      "bar_count": 783,
+      "levels": {
+        "PDH": null,
+        "PDL": null,
+        "PDC": null,
+        "ONH": null,
+        "ONL": null,
+        "VWAP_PROXY": 6976.54
+      },
+      "distances": {
+        "PDH": null,
+        "PDL": null,
+        "PDC": null,
+        "ONH": null,
+        "ONL": null,
+        "VWAP_PROXY": {
+          "points": -0.46,
+          "atr": -0.21
+        }
+      },
+      "vwap_method": "VOLUME_WEIGHTED",
+      "dte": 83,
+      "contract_id": 750150186,
+      "contract_month": "20260320",
+      "levels_available": false,
+      "data_quality": "DELAYED",
+      "last_tick_ts": "2025-12-27T20:23:14.369380+00:00",
+      "last_hist_bar_ts": null
+    },
+    "gate": {
+      "execution_enabled": false,
+      "session_open": false,
+      "account_ready": true,
+      "blocked_reason": null
+    },
+    "market_context": {
+      "connected": true,
+      "session_open": false,
+      "execution_enabled": false,
+      "data_mode": 4,
+      "data_quality": "DELAYED",
+      "last_tick_ts": null,
+      "last_hist_bar_ts": null,
+      "primary_contract": {
+        "conId": 750150186,
+        "lastTradeDate": "20260320",
+        "symbol": "MES"
+      },
+      "dte": 83,
+      "contract_month": "20260320"
+    }
+  }
+}
