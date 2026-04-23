@@ -1,7 +1,12 @@
 # Runtime configuration for adapter selection and defaults
-adapter: tradovate  # tradovate | ninjatrader
+adapter: ibkr  # ibkr | tradovate | ninjatrader
 fill_mode: IMMEDIATE  # IMMEDIATE | DELAYED | PARTIAL | TIMEOUT (Tradovate SIM only)
 adapter_kwargs:
-  # For NinjaTrader bridge
-  base_url: http://127.0.0.1:8123
-  auth_token: changeme
+  # For IBKR Gateway (Paper Trading)
+  host: 127.0.0.1
+  port: 7497       # Paper trading port (7497=paper, 7496=live)
+  client_id: 1
+  mode: OBSERVE    # OBSERVE = paper/no-execute, LIVE = execute orders
+  # For NinjaTrader bridge (alternative)
+  # base_url: http://127.0.0.1:8123
+  # auth_token: changeme

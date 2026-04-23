@@ -1,53 +1,88 @@
 # SESSION SPECIFICATION
 # Temporal structure, no-trade windows, session-specific behavior
 
-version: "1.0.1"
+version: "2.0.0"
 changelog:
+  v2.0.0:
+    - "Enable 24/7 GLOBEX trading for MES futures"
+    - "Add ETH (Extended Trading Hours) session definition"
+    - "Reduce no-trade windows for continuous operation"
+    - "Allow overnight positions with proper risk management"
   v1.0.1:
     - "Canonicalized no-trade windows as structured entries (testable, computable)"
     - "Explicitly marked session.yaml as single source of truth for temporal gates"
     - "Added fallback and fail-closed behaviors for missing/unknown schedule"
 
 # ==========================================
-# SESSION DEFINITION
+# SESSION DEFINITION - 24/7 GLOBEX
 # ==========================================
 session:
-  primary_session: "RTH"  # Regular Trading Hours
+  primary_session: "GLOBEX"  # 24/7 futures trading (was RTH)
   timezone: "US/Eastern"
-  
-  # RTH schedule
+
+  # GLOBEX schedule (MES futures)
+  # Sunday 6:00 PM ET - Friday 5:00 PM ET
+  # Daily maintenance: 5:00 PM - 6:00 PM ET (Mon-Thu)
+  globex:
+    week_open: "Sunday 18:00"      # Sunday 6 PM ET
+    week_close: "Friday 17:00"     # Friday 5 PM ET
+    daily_maintenance_start: "17:00"  # 5 PM ET
+    daily_maintenance_end: "18:00"    # 6 PM ET
+    trading_days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+  # RTH schedule (subset of GLOBEX, higher liquidity)
   rth:
     open_time: "09:30"
     close_time: "16:00"
     trading_days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    
-  # No overnight positions
-  flatten_before_close: true
-  flatten_time: "15:55"  # 5 minutes before close
+
+  # ETH schedule (Extended Trading Hours - outside RTH)
+  eth:
+    evening_start: "18:00"   # 6 PM ET (after maintenance)
+    evening_end: "09:30"     # Until RTH open next day
+    afternoon_start: "16:00" # After RTH close
+    afternoon_end: "17:00"   # Until maintenance
+
+  # Overnight positions NOW ALLOWED for 24/7 operation
+  flatten_before_close: false  # Changed from true - allow overnight
+  flatten_time: null           # No forced flatten
+  weekly_flatten_time: "Friday 16:45"  # Flatten before weekend (optional safety)
   canonical_source: true  # Constitution references this file for all session gates
   
 # ==========================================
 # NO-TRADE WINDOWS (Session Gates)
 # ==========================================
-# Explicit windows where trading is blocked (structured, testable)
+# Reduced windows for 24/7 operation - only block maintenance and high-risk periods
 no_trade_windows:
+  - id: "DAILY_MAINTENANCE"
+    enabled: true
+    start_time: "17:00"
+    end_time: "18:00"
+    reason: "CME daily maintenance window - no trading"
+
   - id: "OPENING_BLOCK"
     enabled: true
     start_time: "09:30"
-    end_time: "09:35"
-    reason: "Opening auction volatility; wait for structure"
+    end_time: "09:32"
+    reason: "RTH opening auction - reduced from 5 to 2 minutes"
 
   - id: "LUNCH_BLOCK"
-    enabled: true
+    enabled: false  # DISABLED for 24/7 - can still trade during lunch
     start_time: "11:30"
     end_time: "13:30"
-    reason: "Low participation / directional ambiguity"
+    reason: "Low participation (optional - disabled for 24/7)"
 
   - id: "CLOSE_BLOCK"
-    enabled: true
+    enabled: false  # DISABLED - no forced flatten for 24/7
     start_time: "15:55"
     end_time: "16:00"
-    reason: "Flatten deadline; no new positions near close"
+    reason: "RTH close (optional - disabled for 24/7)"
+
+  - id: "WEEKEND"
+    enabled: true
+    start_time: "Friday 17:00"
+    end_time: "Sunday 18:00"
+    reason: "Weekend closure - market closed"
 
 # Fail-closed behavior: if this section fails to load, trading is disallowed
 no_trade_windows_fail_closed: true
@@ -118,16 +153,16 @@ session_phases:
 # ==========================================
 # VWAP SESSION RESET
 # ==========================================
-# VWAP is session-specific for MES
-# Reset at RTH open, not overnight
+# For 24/7: VWAP resets at GLOBEX open (Sunday 6 PM) or daily at RTH open
 vwap_config:
-  reset_time: "09:30"  # RTH open
-  session_type: "RTH"  # Only RTH bars included in VWAP
-  include_overnight: false
-  
-  # Optionally compute overnight VWAP separately for gap analysis
-  # but do NOT use for trading (we don't trade overnight)
-  overnight_vwap_for_analysis_only: true
+  reset_time: "09:30"  # Still reset at RTH open for consistency
+  session_type: "GLOBEX"  # Include all GLOBEX bars in VWAP
+  include_overnight: true  # Now include overnight bars
+
+  # Compute separate VWAPs for analysis
+  compute_rth_vwap: true      # Traditional RTH-only VWAP
+  compute_globex_vwap: true   # Full 24-hour VWAP
+  primary_vwap: "GLOBEX"      # Use GLOBEX VWAP for signals
   
 # ==========================================
 # SPECIAL DAYS (Holidays, Half-Days)
@@ -159,16 +194,19 @@ special_days:
     # Update annually
     
 # ==========================================
-# SCALABILITY CONSIDERATIONS
+# 24/7 OPERATION NOTES
 # ==========================================
-# As system scales:
-# - May trade multiple sessions (RTH + select ETH windows)
-# - May trade multiple instruments with different session schedules
-# - May need per-instrument session configs
-# - May need to handle international markets
+# v2.0: Now trading full GLOBEX session
+# - Sunday 6 PM ET through Friday 5 PM ET
+# - Daily maintenance window: 5-6 PM ET (Mon-Thu)
+# - RTH (9:30 AM - 4 PM ET) has highest liquidity
+# - ETH has lower volume but valid setups exist
 #
-# For v1: RTH only, MES only, keep it simple
-# But design must allow for session expansion as capital/capability grows
+# Risk considerations for 24/7:
+# - Wider stops during low-liquidity ETH
+# - Position sizing may be reduced during ETH
+# - Kill switch still active at all times
+# - Weekly flatten optional (Friday 4:45 PM)
 
 # Fail-closed policy (constitutional expectation):
 # If session.yaml cannot be loaded or parsed, default to OBSERVE_ONLY.
