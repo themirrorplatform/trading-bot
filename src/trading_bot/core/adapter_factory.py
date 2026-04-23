@@ -29,5 +29,13 @@ def create_adapter(name: str = "tradovate", **kwargs: Any):
         base_url = kwargs.get("base_url") or "http://127.0.0.1:8123"
         auth_token = kwargs.get("auth_token") or "changeme"
         return NinjaTraderBridgeAdapter(base_url=base_url, auth_token=auth_token)
+    elif n in ("ibkr", "ib", "interactive-brokers", "tws", "gateway"):
+        from trading_bot.adapters.ibkr_adapter import IBKRAdapter
+        return IBKRAdapter(
+            mode=kwargs.get("mode", "OBSERVE"),
+            host=kwargs.get("host", "127.0.0.1"),
+            port=int(kwargs.get("port", 7497)),  # 7497=paper, 7496=live
+            client_id=int(kwargs.get("client_id", 1)),
+        )
     else:
         raise ValueError(f"Unknown adapter name: {name}")

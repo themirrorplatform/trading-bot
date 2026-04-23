@@ -152,6 +152,18 @@ class TradovateSimAdapter:
             "last_fill_price": float(self._last_fill_price) if self._last_fill_price is not None else None,
         }
 
+    def get_account_snapshot(self) -> Dict[str, Any]:
+        """Return simulated account snapshot for SIM adapter."""
+        return {
+            "equity": 10000.0,  # Simulated starting equity
+            "buying_power": 10000.0,
+            "maintenance_margin": 0.0,
+            "initial_margin": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "raw": {"NetLiquidation": "10000.0"},  # Simulate IBKR-style response
+        }
+
     def set_kill_switch(self, active: bool) -> None:
         # SIM: no-op aside from internal flag
         self._kill_switch = bool(active)
